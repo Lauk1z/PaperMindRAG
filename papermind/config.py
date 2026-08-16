@@ -10,6 +10,30 @@ import os
 from dataclasses import dataclass, field
 
 
+def _load_dotenv():
+    """加载项目根目录的 .env 文件到环境变量（不覆盖已存在的变量）。
+
+    手写极简解析，避免引入 python-dotenv 依赖。
+    .env 已被 .gitignore 排除，API key 不会进入版本库。
+    """
+    env_path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_dotenv()
+
+
 @dataclass
 class Config:
     # ---------- 分块参数 ----------
