@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperMind · 学术论文智能问答</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #0f1420; color: #e8eaf0; height: 100vh;
+    display: flex; flex-direction: column;
+  }
+  header {
+    padding: 14px 24px; background: #161c2c; border-bottom: 1px solid #232b42;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header h1 span { color: #6c8cff; }
+  #status-bar { font-size: 12px; color: #8a93ad; }
+  main { flex: 1; display: flex; overflow: hidden; }
+
+  /* 左侧：知识库面板 */
+  aside {
+    width: 280px; background: #131928; border-right: 1px solid #232b42;
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  aside h2 { font-size: 13px; color: #8a93ad; font-weight: 500; }
+  #drop-zone {
+    border: 2px dashed #33406a; border-radius: 10px; padding: 22px 12px;
+    text-align: center; font-size: 13px; color: #8a93ad; cursor: pointer;
+    transition: all .2s;
+  }
+  #drop-zone:hover, #drop-zone.dragover { border-color: #6c8cff; color: #c3cdf5; background: #1a2340; }
+  #doc-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .doc-item {
+    background: #1a2136; border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  }
+  .doc-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .doc-item .chunks { color: #6c8cff; flex-shrink: 0; }
+  #reset-btn {
+    background: none; border: 1px solid #3a2b3a; color: #c98a8a; border-radius: 8px;
+    padding: 7px; font-size: 12px; cursor: pointer;
+  }
+  #reset-btn:hover { background: #2a1a24; }
+
+  /* 右侧：对话区 */
+  section { flex: 1; display: flex; flex-direction: column; }
+  #chat { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { max-width: 78%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: #2b4a9e; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: #1a2136; border-bottom-left-radius: 4px; }
+  .msg.bot .meta { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a3352; font-size: 12px; color: #8a93ad; }
+  .msg.bot .src { display: block; margin-top: 3px; color: #6c8cff; }
+  .msg.error { background: #3a2030; }
+
+  #input-bar { padding: 16px 24px; background: #131928; border-top: 1px solid #232b42; display: flex; gap: 10px; }
+  #question {
+    flex: 1; background: #1a2136; border: 1px solid #2a3352; border-radius: 10px;
+    padding: 12px 14px; color: #e8eaf0; font-size: 14px; outline: none; resize: none;
+  }
+  #question:focus { border-color: #6c8cff; }
+  #ask-btn {
+    background: #4a6cf0; border: none; color: #fff; border-radius: 10px;
+    padding: 0 26px; font-size: 14px; cursor: pointer; font-weight: 500;
+  }
+  #ask-btn:hover { background: #5a7cff; }
+  #ask-btn:disabled { background: #333c58; cursor: not-allowed; }
+  .hint { text-align: center; color: #566080; font-size: 13px; margin-top: 60px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 Paper<span>Mind</span> · 学术论文智能问答</h1>
+  <div id="status-bar">加载中...</div>
+</header>
+<main>
+  <aside>
+    <h2>知识库</h2>
+    <div id="drop-zone">点击或拖拽上传论文<br><small>支持 PDF / TXT / MD</small></div>
+    <input type="file" id="file-input" multiple accept=".pdf,.txt,.md" hidden>
+    <div id="doc-list"></div>
+    <button id="reset-btn">清空知识库</button>
+  </aside>
+  <section>
+    <div id="chat">
+      <div class="hint">上传论文后，向你的文献提问吧<br>答案会标注引用来源 [1][2]，可溯源核查</div>
+    </div>
+    <div id="input-bar">
+      <textarea id="question" rows="1" placeholder="输入你的问题，回车发送（Shift+回车换行）"></textarea>
+      <button id="ask-btn">提问</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const chat = $('chat'), statusBar = $('status-bar');
+
+// ---------- 状态栏与文档列表 ----------
+async function refreshStatus() {
+  const s = await (await fetch('/api/status')).json();
+  statusBar.textContent = s.has_api_key
+    ? `知识库 ${s.total_chunks} 块 · 模型 ${s.chat_model}`
+    : `知识库 ${s.total_chunks} 块 · ⚠未配置API Key（仅检索模式）`;
+  const list = $('doc-list');
+  list.innerHTML = '';
+  s.documents.forEach(name => {
+    const div = document.createElement('div');
+    div.className = 'doc-item';
+    div.innerHTML = `<span class="name" title="${name}">📄 ${name}</span>`;
+    list.appendChild(div);
+  });
+}
+
+// ---------- 上传 ----------
+const dropZone = $('drop-zone'), fileInput = $('file-input');
+dropZone.onclick = () => fileInput.click();
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
+dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+dropZone.ondrop = e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  uploadFiles(e.dataTransfer.files);
+};
+fileInput.onchange = () => { uploadFiles(fileInput.files); fileInput.value = ''; };
+
+async function uploadFiles(files) {
+  if (!files.length) return;
+  const fd = new FormData();
+  [...files].forEach(f => fd.append('files', f));
+  dropZone.textContent = '解析并建立索引中...';
+  try {
+    const r = await (await fetch('/api/upload', { method: 'POST', body: fd })).json();
+    const msgs = [];
+    r.ingested.forEach(i => msgs.push(`✅ ${i.doc_name}：切分为 ${i.chunks} 块（${i.elapsed}s）`));
+    r.errors.forEach(e => msgs.push(`❌ ${e}`));
+    addMsg('bot', msgs.join('\n'));
+  } catch (e) {
+    addMsg('bot error', '上传失败: ' + e);
+  }
+  dropZone.innerHTML = '点击或拖拽上传论文<br><small>支持 PDF / TXT / MD</small>';
+  refreshStatus();
+}
+
+// ---------- 问答 ----------
+function addMsg(role, text, sources) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = text;
+  if (sources && sources.length) {
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML = '<b>引用来源：</b>';
+    sources.forEach((s, i) => {
+      const span = document.createElement('span');
+      span.className = 'src';
+      span.textContent = `[${i + 1}] ${s.doc_name} 第${s.page}页 · 相关度 ${s.score}`;
+      meta.appendChild(span);
+    });
+    div.appendChild(meta);
+  }
+  const hint = chat.querySelector('.hint');
+  if (hint) hint.remove();
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+async function ask() {
+  const q = $('question').value.trim();
+  if (!q) return;
+  $('question').value = '';
+  addMsg('user', q);
+  const btn = $('ask-btn');
+  btn.disabled = true; btn.textContent = '思考中...';
+  const loading = addMsg('bot', '正在检索文献并生成回答...');
+  try {
+    const resp = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q }),
+    });
+    const r = await resp.json();
+    loading.remove();
+    if (r.error) addMsg('bot error', r.error);
+    else addMsg('bot', `${r.answer}\n\n（耗时 ${r.elapsed}s）`, r.sources);
+  } catch (e) {
+    loading.remove();
+    addMsg('bot error', '请求失败: ' + e);
+  }
+  btn.disabled = false; btn.textContent = '提问';
+}
+
+$('ask-btn').onclick = ask;
+$('question').onkeydown = e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
+};
+$('reset-btn').onclick = async () => {
+  if (!confirm('确定清空知识库？')) return;
+  await fetch('/api/reset', { method: 'POST' });
+  chat.innerHTML = '<div class="hint">知识库已清空，请重新上传论文</div>';
+  refreshStatus();
+};
+
+refreshStatus();
+</script>
+</body>
+</html>
