@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import sqlite3
+import time
 
 from authlib.integrations.flask_client import OAuth
 from flask import (Blueprint, current_app, g, jsonify, redirect, render_template,
@@ -22,6 +23,7 @@ API_CONFIG_FIELDS = (
     "embed_base_url",
     "embed_api_model",
 )
+OAUTH_HANDOFF_TTL = 10 * 60
 
 
 def _connect():
@@ -185,6 +187,27 @@ def _sign_in(user_id):
 
 def _provider_status():
     return current_app.extensions["pm_oauth_providers"]
+
+
+def _oauth_handoffs():
+    handoffs = current_app.extensions["pm_oauth_handoffs"]
+    now = time.monotonic()
+    expired = [
+        token for token, item in handoffs.items()
+        if now - item["created_at"] > OAUTH_HANDOFF_TTL
+    ]
+    for token in expired:
+        handoffs.pop(token, None)
+    return handoffs
+
+
+def _finish_oauth_handoff(token, user_id=None, error=""):
+    item = _oauth_handoffs().get(token)
+    if not item:
+        return False
+    item["user_id"] = user_id
+    item["error"] = error
+    return True
 
 
 def _oauth_profile(provider, remote, token):
@@ -370,24 +393,78 @@ def oauth_start(provider):
         return redirect(url_for("auth.login_page", error="不支持该登录方式"))
     if not _provider_status()[provider]:
         return redirect(url_for("auth.login_page", error=f"{provider.title()} 登录尚未配置"))
+    handoff = request.args.get("handoff", "")
+    if handoff:
+        if not _account_switcher_enabled() or handoff not in _oauth_handoffs():
+            return redirect(url_for("auth.login_page", error="桌面登录请求已过期"))
+        session["oauth_handoff"] = handoff
     remote = current_app.extensions["pm_oauth"].create_client(provider)
     callback = url_for("auth.oauth_callback", provider=provider, _external=True)
     return remote.authorize_redirect(callback)
+
+
+@auth_bp.route("/auth/oauth/desktop/<provider>", methods=["POST"])
+def oauth_desktop_start(provider):
+    if not _account_switcher_enabled():
+        return jsonify({"ok": False, "error": "仅桌面版支持系统浏览器登录"}), 404
+    if not valid_csrf():
+        return jsonify({"ok": False, "error": "页面已过期，请刷新后重试"}), 403
+    if provider not in _provider_status() or not _provider_status()[provider]:
+        return jsonify({"ok": False, "error": "登录方式未配置"}), 400
+
+    token = secrets.token_urlsafe(32)
+    _oauth_handoffs()[token] = {
+        "created_at": time.monotonic(),
+        "user_id": None,
+        "error": "",
+    }
+    return jsonify({
+        "ok": True,
+        "token": token,
+        "url": url_for("auth.oauth_start", provider=provider,
+                       handoff=token, _external=True),
+    })
+
+
+@auth_bp.route("/auth/oauth/desktop/status/<token>")
+def oauth_desktop_status(token):
+    if not _account_switcher_enabled():
+        return jsonify({"ok": False, "error": "仅桌面版支持系统浏览器登录"}), 404
+    item = _oauth_handoffs().get(token)
+    if not item:
+        return jsonify({"ok": False, "error": "登录请求已过期，请重试"}), 410
+    if item["error"]:
+        _oauth_handoffs().pop(token, None)
+        return jsonify({"ok": False, "error": item["error"]}), 400
+    if item["user_id"] is None:
+        return jsonify({"ok": True, "pending": True}), 202
+
+    user_id = item["user_id"]
+    _oauth_handoffs().pop(token, None)
+    _sign_in(user_id)
+    return jsonify({"ok": True, "pending": False, "user": _load_user(user_id)})
 
 
 @auth_bp.route("/auth/oauth/<provider>/callback")
 def oauth_callback(provider):
     if provider not in _provider_status() or not _provider_status()[provider]:
         return redirect(url_for("auth.login_page", error="登录方式未配置"))
+    handoff = session.get("oauth_handoff", "")
     try:
         remote = current_app.extensions["pm_oauth"].create_client(provider)
         token = remote.authorize_access_token()
         user = _oauth_user(provider, _oauth_profile(provider, remote, token))
+        if handoff and _finish_oauth_handoff(handoff, user_id=user["id"]):
+            session.clear()
+            return render_template("oauth_complete.html", ok=True, error="")
         _sign_in(user["id"])
         return redirect(url_for("index"))
     except Exception as error:
         current_app.logger.warning("%s OAuth 登录失败: %s", provider, error)
         message = str(error) if isinstance(error, ValueError) else "第三方登录失败，请重试"
+        if handoff and _finish_oauth_handoff(handoff, error=message):
+            session.clear()
+            return render_template("oauth_complete.html", ok=False, error=message), 400
         return redirect(url_for("auth.login_page", error=message))
 
 
@@ -479,6 +556,7 @@ def init_auth(app, db_path, required=True):
         for name, (client_id, client_secret) in provider_env.items()
     }
     app.extensions["pm_oauth_providers"] = providers
+    app.extensions["pm_oauth_handoffs"] = {}
 
     oauth.register(
         "github",

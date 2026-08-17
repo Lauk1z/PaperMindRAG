@@ -5,6 +5,8 @@ import logging
 import os
 from pathlib import Path
 import threading
+from urllib.parse import urlparse
+import webbrowser
 
 
 APP_NAME = "PaperMind"
@@ -75,7 +77,7 @@ class LocalServer:
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self._server.server_port}/"
+        return f"http://localhost:{self._server.server_port}/"
 
     @property
     def running(self) -> bool:
@@ -90,6 +92,25 @@ class LocalServer:
         self._server.shutdown()
         self._thread.join(timeout=5)
         self._server.server_close()
+
+
+class DesktopApi:
+    """Small WebView bridge used only to open local OAuth starts externally."""
+
+    def __init__(self, server_url: str):
+        parsed = urlparse(server_url)
+        self._port = parsed.port
+
+    def open_external(self, url: str) -> bool:
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"localhost", "127.0.0.1"}
+            or parsed.port != self._port
+            or not parsed.path.startswith("/auth/oauth/")
+        ):
+            return False
+        return bool(webbrowser.open(url))
 
 
 def _show_startup_error(message: str) -> None:
@@ -126,6 +147,7 @@ def run_desktop() -> int:
         webview.create_window(
             "PaperMind · 论文知识工作台",
             server.url,
+            js_api=DesktopApi(server.url),
             width=1280,
             height=820,
             min_size=(960, 640),

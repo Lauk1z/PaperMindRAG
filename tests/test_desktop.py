@@ -1,10 +1,33 @@
 import os
+from pathlib import Path
+import subprocess
+import sys
 import time
 
 from flask import Flask
 import requests
 
-from papermind.desktop import LocalServer, configure_desktop_environment
+from papermind.desktop import DesktopApi, LocalServer, configure_desktop_environment
+
+
+def test_desktop_import_keeps_config_lazy():
+    root = Path(__file__).resolve().parents[1]
+    code = """
+import sys
+import papermind.desktop
+assert "papermind.config" not in sys.modules
+from papermind import Config
+assert Config.__name__ == "Config"
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_configure_desktop_environment_uses_persistent_paths(tmp_path, monkeypatch):
@@ -42,7 +65,7 @@ def test_local_server_uses_loopback_and_stops():
         return {"ok": True}
 
     server = LocalServer(app)
-    assert server.url.startswith("http://127.0.0.1:")
+    assert server.url.startswith("http://localhost:")
 
     server.start()
     try:
@@ -56,3 +79,18 @@ def test_local_server_uses_loopback_and_stops():
             break
         time.sleep(0.01)
     assert not server.running
+
+
+def test_desktop_api_only_opens_local_oauth_urls(monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        "papermind.desktop.webbrowser.open",
+        lambda url: opened.append(url) or True,
+    )
+    api = DesktopApi("http://localhost:5000/")
+
+    allowed = "http://localhost:5000/auth/oauth/google?handoff=test"
+    assert api.open_external(allowed) is True
+    assert api.open_external("https://accounts.google.com/") is False
+    assert api.open_external("http://localhost:5001/auth/oauth/google") is False
+    assert opened == [allowed]

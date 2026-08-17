@@ -146,9 +146,9 @@ PM_MAIL_TO=you@qq.com,peer@x.com   # 收件人，逗号分隔
 OAuth 应用需要登记与当前访问域名完全一致的回调地址。本机默认端口示例：
 
 ```text
-http://127.0.0.1:5000/auth/oauth/github/callback
-http://127.0.0.1:5000/auth/oauth/google/callback
-http://127.0.0.1:5000/auth/oauth/microsoft/callback
+http://localhost:5000/auth/oauth/github/callback
+http://localhost:5000/auth/oauth/google/callback
+http://localhost:5000/auth/oauth/microsoft/callback
 ```
 
 未填写某个平台的 Client ID/Secret 时，对应快捷登录按钮仍会展示，但保持禁用。
@@ -159,7 +159,8 @@ http://127.0.0.1:5000/auth/oauth/microsoft/callback
 ## Windows 桌面版
 
 桌面入口使用系统 WebView2（Chromium）显示现有 Flask 页面。双击程序会在本机
-`127.0.0.1:5000` 启动服务，关闭窗口时服务同步退出；登录账户、论文、索引和网页内保存的 API
+`127.0.0.1:5000` 启动服务，并通过 `localhost:5000` 加载界面；关闭窗口时服务同步退出。第三方登录会
+在系统默认浏览器中完成，再自动回到桌面窗口，避免 OAuth 平台拦截内嵌浏览器。登录账户、论文、索引和网页内保存的 API
 配置位于 `%LOCALAPPDATA%\PaperMind`，升级 EXE 不会覆盖这些数据。
 
 如端口 5000 已被占用，可在启动前通过 `PM_DESKTOP_PORT` 改为其他固定端口，并同步

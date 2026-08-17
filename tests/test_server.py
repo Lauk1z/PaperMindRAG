@@ -175,6 +175,47 @@ def test_oauth_callback_uses_forwarded_https_on_render(tmp_path, monkeypatch):
     )
 
 
+def test_desktop_oauth_handoff_signs_in_original_webview(tmp_path, monkeypatch):
+    monkeypatch.setenv("PM_ACCOUNT_SWITCHER", "1")
+    monkeypatch.setenv("PM_GITHUB_CLIENT_ID", "github-client-id")
+    monkeypatch.setenv("PM_GITHUB_CLIENT_SECRET", "github-client-secret")
+    app = _test_app(tmp_path)
+    with app.test_client() as webview_client:
+        webview_client.get("/login")
+        start = webview_client.post(
+            "/auth/oauth/desktop/github",
+            headers={"X-CSRF-Token": _csrf(webview_client)},
+        )
+        assert start.status_code == 200
+        body = start.get_json()
+        assert body["url"].startswith("http://localhost/auth/oauth/github?")
+
+        with sqlite3.connect(app.config["PM_AUTH_DB_PATH"]) as conn:
+            cursor = conn.execute(
+                "INSERT INTO users (email, display_name) VALUES (?, ?)",
+                ("oauth@example.com", "OAuth Reader"),
+            )
+            user_id = cursor.lastrowid
+        app.extensions["pm_oauth_handoffs"][body["token"]]["user_id"] = user_id
+
+        status = webview_client.get(
+            f"/auth/oauth/desktop/status/{body['token']}"
+        )
+        assert status.status_code == 200
+        assert status.get_json()["user"]["email"] == "oauth@example.com"
+        assert webview_client.get("/auth/me").status_code == 200
+
+
+def test_desktop_oauth_handoff_requires_csrf(tmp_path, monkeypatch):
+    monkeypatch.setenv("PM_ACCOUNT_SWITCHER", "1")
+    monkeypatch.setenv("PM_GITHUB_CLIENT_ID", "github-client-id")
+    monkeypatch.setenv("PM_GITHUB_CLIENT_SECRET", "github-client-secret")
+    app = _test_app(tmp_path)
+    with app.test_client() as test_client:
+        test_client.get("/login")
+        assert test_client.post("/auth/oauth/desktop/github").status_code == 403
+
+
 def test_stats_exposes_ui_capabilities(client):
     body = client.get("/api/stats").get_json()
     assert body["ok"] is True
