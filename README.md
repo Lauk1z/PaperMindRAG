@@ -1,5 +1,16 @@
 # PaperMind · CV 异常检测论文 RAG 问答系统
 
+[![Daily Digest](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/daily.yml/badge.svg)](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/daily.yml)
+[![Latest](https://img.shields.io/badge/日报-每日自动更新-blue)](./digest/README.md)
+
+## 🔔 每日论文日报（自动更新，每天可用）
+
+**每天北京时间 09:00**，GitHub Actions 自动完成：抓取 arXiv 最新 CV 异常检测论文 → DeepSeek 中文解读（标题翻译/一句话总结/方法亮点/★推荐评级）→ 自动生成日报提交到仓库。无需任何人工操作，Star 后每天来仓库看 [digest/](./digest/README.md) 就能跟踪领域最新进展。
+
+**这一步同时也是 RAG 知识库的自动供给**——新论文持续入库，问答系统随之"越用越懂"。
+
+---
+
 面向**计算机视觉异常检测（Industrial Anomaly Detection）**论文库的检索增强生成（RAG）问答系统：上传论文 PDF，用中文提问，系统检索最相关的文献片段并让 LLM 生成**带 [1][2] 引用标注**的回答。
 
 ## 架构
