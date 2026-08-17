@@ -1,7 +1,9 @@
 # PaperMind · CV 异常检测论文 RAG 问答系统
 
+[![CI](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/ci.yml/badge.svg)](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/ci.yml)
 [![Daily Digest](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/daily.yml/badge.svg)](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/daily.yml)
 [![Latest](https://img.shields.io/badge/日报-每日自动更新-blue)](./digest/README.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 ## 🔔 每日论文日报（自动更新，每天可用）
 
@@ -126,7 +128,7 @@ papermind/
 
 复现：`python scripts/eval_retrieval.py`（自动跳过未下载的论文）。
 
-## 设计取舍（面试可讲）
+## 设计取舍
 
 | 决策 | 理由 |
 |---|---|
@@ -136,10 +138,14 @@ papermind/
 | 分块 800 字符 + 120 重叠 | 论文段落级语义完整；重叠避免关键句被截断 |
 | 提示词强制引用编号 | 回答可溯源到具体 chunk，可核验、可评估 |
 | 多语言 MiniLM 本地嵌入 | 中文提问英文论文；ONNX 推理免 torch，部署轻 |
-| 测试全离线 stub 外部依赖 | CI 不下模型不联网，0.4s 跑完，降级路径本身也被测试覆盖 |
+| 测试全离线 stub 外部依赖 | CI 不下模型不联网，2s 跑完，降级路径本身也被测试覆盖 |
 
 ## 局限与改进方向
 
 - 图表内容无法解析（PDF 只抽文本），可引入多模态文档解析
 - 嵌入无缓存，可按 chunk 哈希做增量嵌入复用
 - 评测集可扩展为人工标注的多文档混合问题
+
+## License
+
+[MIT](./LICENSE) — 欢迎 Fork、二次开发与 PR。如果项目对你有帮助，欢迎 Star 支持。

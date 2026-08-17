@@ -7,6 +7,8 @@ name = "papermind"
 version = "1.1.0"
 description = "CV 异常检测论文 RAG 问答系统 + 每日 arXiv 中文日报"
 readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "zanezhao0708" }]
 requires-python = ">=3.9"
 dependencies = [
     "flask>=3.0",
