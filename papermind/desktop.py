@@ -62,10 +62,10 @@ def configure_desktop_environment(root: Path = None) -> DesktopPaths:
 class LocalServer:
     """Run a WSGI app on an ephemeral loopback port in a background thread."""
 
-    def __init__(self, app):
+    def __init__(self, app, port: int = 0):
         from werkzeug.serving import make_server
 
-        self._server = make_server("127.0.0.1", 0, app, threaded=True)
+        self._server = make_server("127.0.0.1", port, app, threaded=True)
         self._thread = threading.Thread(
             target=self._server.serve_forever,
             name="papermind-local-server",
@@ -117,7 +117,8 @@ def run_desktop() -> int:
 
         from papermind.server import create_app
 
-        server = LocalServer(create_app())
+        desktop_port = int(os.environ.get("PM_DESKTOP_PORT", "5000"))
+        server = LocalServer(create_app(), port=desktop_port)
         server.start()
         logger.info("PaperMind desktop server started at %s", server.url)
 
@@ -147,4 +148,3 @@ def run_desktop() -> int:
         if server is not None:
             server.stop()
             logger.info("PaperMind desktop server stopped")
-
