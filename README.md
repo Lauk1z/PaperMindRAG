@@ -1,86 +1,88 @@
-# 📚 PaperMind — 学术论文 RAG 智能问答系统
+# PaperMind · CV 异常检测论文 RAG 问答系统
 
-上传论文 PDF，向量化建库，用大模型回答你的问题——**每个答案都带引用来源，可溯源核查**。
+面向**计算机视觉异常检测（Industrial Anomaly Detection）**论文库的检索增强生成（RAG）问答系统：上传论文 PDF，用中文提问，系统检索最相关的文献片段并让 LLM 生成**带 [1][2] 引用标注**的回答。
 
-一个为**研究生复试**打造的 RAG 全链路实现：代码逐模块拆解、关键位置附面试考点注释、仓库内含《复试 RAG 高频面试题与回答思路》。
+## 架构
 
-## ✨ 特性
+```
+                     ┌──────────── 摄入链路 ────────────┐
+ PDF/TXT/MD ──> Loader ──> Chunker ──> Embedder ──> VectorStore(持久化)
+              (pypdf抽取)  (递归分割    (三级降级)     (NumPy余弦)
+                           800/120)
 
-- **完整 RAG 链路**：解析 → 递归分块 → 向量化 → 余弦检索 → 带引用生成，每个环节独立模块，可单独讲解与替换
-- **引用溯源**：答案标注 `[1][2]` 来源（文档名 + 页码 + 相关度），这是控制幻觉的关键设计
-- **零重依赖**：向量检索用 numpy 手写（面试能讲清余弦相似度公式），不依赖 FAISS/LangChain 黑盒
-- **多后端**：嵌入与生成均支持任意 OpenAI 兼容接口（OpenAI / DeepSeek / 通义千问 / 本地 Ollama）；无 API key 也能跑通流程（降级为本地嵌入 + 抽取式回答）
-- **Web 界面**：拖拽上传、实时问答、知识库管理
+                     ┌──────────── 问答链路 ────────────┐
+ 中文问题 ──> Embedder ──> Retriever ──> Generator ──> 带引用的回答
+              (查询嵌入)   (top-k+阈值过滤)  (DeepSeek LLM)
+```
 
-## 🚀 快速开始
+### 嵌入三级降级（系统在无网/无 Key 环境也能跑）
+1. **API 嵌入**：OpenAI 兼容 `/embeddings`（需配置 `PM_EMBED_API_KEY`）
+2. **本地语义嵌入**：fastembed + ONNX Runtime，默认多语言模型
+   `paraphrase-multilingual-MiniLM-L12-v2`，支持**中文问句 ↔ 英文论文**跨语言检索
+3. **哈希兜底**：词/字符 n-gram 哈希投影，纯离线（仅词面匹配，无语义）
+
+## 快速开始
 
 ```bash
 pip install -r requirements.txt
 
-# 可选：配置大模型（不配也能跑，仅检索模式）
-export PM_API_KEY=sk-xxxx
-export PM_BASE_URL=https://api.deepseek.com/v1   # 或其他OpenAI兼容接口
-export PM_CHAT_MODEL=deepseek-chat
-export PM_EMBED_MODEL=text-embedding-3-small
+# 1) 下载 CV 异常检测经典论文（PatchCore/PaDiM/SPADE/CutPaste/DRAEM 等 8 篇）
+python scripts/download_papers.py
 
-python app.py
-# 打开 http://localhost:8899
+# 2) 启动（自动加载 data/docs 并摄入）
+python app.py            # 打开 http://127.0.0.1:5000
 ```
 
-**使用流程**：拖入论文 PDF → 自动切块建索引 → 提问 → 得到带引用的回答。
+命令行直接问答：
 
-## 🏗️ 架构（面试讲解顺序）
-
-```
-离线索引阶段                          在线问答阶段
-┌────────┐   ┌────────┐   ┌────────┐     ┌────────┐   ┌────────┐   ┌────────┐
-│ loader │ → │chunker │ → │embedder│     │embedder│ → │retriever│ → │generator│
-│ PDF解析 │   │ 递归分块│   │ 向量化  │     │问题向量化│  │ Top-K检索│   │带引用生成 │
-└────────┘   └────────┘   └───┬────┘     └────────┘   └────────┘   └────────┘
-                              ↓               ↑
-                        ┌──────────────────────────┐
-                        │      vectorstore          │
-                        │  向量存储 + 余弦相似度检索   │
-                        └──────────────────────────┘
+```bash
+python -c "
+from papermind.pipeline import RAGPipeline
+pipe = RAGPipeline()
+r = pipe.query('PatchCore 如何用 memory bank 做异常检测?')
+print(r['answer']); print(r['sources'])"
 ```
 
-| 模块 | 文件 | 面试考点 |
-|------|------|---------|
-| 文档解析 | [loader.py](papermind/loader.py) | PDF解析方案对比、扫描版OCR、版面分析 |
-| 递归分块 | [chunker.py](papermind/chunker.py) | 为什么分块、chunk_size怎么定、overlap作用 |
-| 嵌入 | [embeddings.py](papermind/embeddings.py) | Embedding原理、向量vs关键词检索、混合检索 |
-| 向量库 | [vectorstore.py](papermind/vectorstore.py) | 余弦相似度公式、HNSW/IVF索引、向量库选型 |
-| 检索 | [retriever.py](papermind/retriever.py) | 查询改写、多路召回、重排序、HyDE |
-| 生成 | [generator.py](papermind/generator.py) | Prompt工程、幻觉控制、引用标注 |
-| 管线 | [pipeline.py](papermind/pipeline.py) | RAG全流程串讲 |
+## 配置（.env，已 gitignore）
 
-## 🎓 复试准备
+```ini
+PM_API_KEY=sk-xxx                # DeepSeek（生成模型）
+PM_BASE_URL=https://api.deepseek.com/v1
+PM_CHAT_MODEL=deepseek-chat
+PM_LOCAL_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+HF_ENDPOINT=https://hf-mirror.com   # 模型权重国内镜像
+```
 
-**必读**：[INTERVIEW.md](INTERVIEW.md) — 整理了 20+ 道 RAG 高频面试题与回答思路，覆盖原理、工程、调优、前沿方向，并标注了本项目中对应的代码位置（面试时可以说"这个我在我的项目里是这样实现的…"）。
-
-## ⚙️ 可调参数
-
-全部集中在 [config.py](papermind/config.py)：`chunk_size`（分块大小）、`chunk_overlap`（重叠）、`top_k`（召回数）、`sim_threshold`（相关度阈值）——改参数观察效果变化，就是最好的调参练习。
-
-## 📁 目录结构
+## 目录结构
 
 ```
 papermind/
-├── app.py                 # Flask Web服务
-├── templates/index.html   # 聊天界面
-├── papermind/
-│   ├── config.py          # 全局配置（含参数原理注释）
-│   ├── loader.py          # 文档解析
-│   ├── chunker.py         # 递归分块
-│   ├── embeddings.py      # 嵌入（API/本地兜底）
-│   ├── vectorstore.py     # 向量存储与检索
-│   ├── retriever.py       # 检索策略
-│   ├── generator.py       # 带引用生成
-│   └── pipeline.py        # RAG管线
-├── INTERVIEW.md           # 复试面试题与回答思路
-└── requirements.txt
+├── papermind/          # 核心包
+│   ├── config.py       # 集中配置 + .env 加载
+│   ├── loader.py       # PDF/TXT/MD 加载
+│   ├── chunker.py      # 递归字符分块（可重叠）
+│   ├── embeddings.py   # 三级降级嵌入
+│   ├── vectorstore.py  # NumPy 向量库（余弦检索+持久化）
+│   ├── retriever.py    # top-k 召回 + 阈值过滤
+│   ├── generator.py    # LLM 生成（引用约束/抽取式兜底）
+│   └── pipeline.py     # RAG 编排
+├── templates/index.html# Web UI
+├── scripts/download_papers.py
+└── app.py              # Flask 服务
 ```
 
-## License
+## 设计取舍（面试可讲）
 
-MIT
+| 决策 | 理由 |
+|---|---|
+| NumPy 暴力余弦而非 FAISS | 论文库量级小（千级块），暴力扫描 <10ms；全流程透明可解释 |
+| 检索阈值过滤（0.30） | 宁缺毋滥，低相关片段会诱导 LLM 幻觉 |
+| 分块 800 字符 + 120 重叠 | 论文段落级语义完整；重叠避免关键句被截断 |
+| 提示词强制引用编号 | 回答可溯源到具体 chunk，可核验、可评估 |
+| 多语言 MiniLM 本地嵌入 | 中文提问英文论文；ONNX 推理免 torch，部署轻 |
+
+## 局限与改进方向
+
+- 检索为纯稠密向量，可加 BM25 混合检索（Hybrid Search）提升召回
+- 图表内容无法解析（PDF 只抽文本），可引入多模态文档解析
+- 全量重建索引，可改增量摄入 + 按 source 去重更新

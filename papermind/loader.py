@@ -1,43 +1,63 @@
-"""文档加载层：PDF / TXT / MD -> 带元数据的纯文本片段。
-
-【面试考点】文档解析是RAG的第一步，也是工程上最容易出问题的环节：
-- PDF解析常用 pypdf / pdfplumber / PyMuPDF，各有优劣
-- 扫描版PDF（图片）需要OCR，双栏排版需要专门的版面分析
-- 解析质量直接决定后续检索上限（garbage in, garbage out）
-"""
+"""文档加载模块：把 PDF / TXT / Markdown 读成统一的 Document 结构。"""
 import os
+from dataclasses import dataclass, field
+from typing import List
 
 
-def load_file(path: str):
-    """加载单个文件，返回 [(text, meta), ...]
+@dataclass
+class Document:
+    """一篇论文/一份文档的纯文本表示。"""
+    text: str
+    source: str                      # 文件名（用于引用溯源）
+    pages: int = 1
+    meta: dict = field(default_factory=dict)
 
-    meta 中携带 doc_name / page 等信息，最终会展示为答案的引用来源。
-    """
-    ext = os.path.splitext(path)[1].lower()
-    doc_name = os.path.basename(path)
 
-    if ext == ".pdf":
-        return _load_pdf(path, doc_name)
-    if ext in (".txt", ".md"):
+class Loader:
+    """统一入口：按扩展名分发给具体解析器。"""
+
+    SUPPORTED = {".pdf", ".txt", ".md", ".markdown"}
+
+    def load(self, path: str) -> Document:
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in self.SUPPORTED:
+            raise ValueError(f"不支持的文件类型 {ext}: {path}")
+        source = os.path.basename(path)
+        if ext == ".pdf":
+            text, pages = self._load_pdf(path)
+            return Document(text=text, source=source, pages=pages,
+                            meta={"type": "pdf"})
         with open(path, encoding="utf-8", errors="ignore") as f:
-            text = f.read().strip()
-        return [(text, {"doc_name": doc_name, "page": 1})]
-    raise ValueError(f"暂不支持的文件类型: {ext}（支持 .pdf / .txt / .md）")
+            text = f.read()
+        return Document(text=text, source=source,
+                        meta={"type": ext.lstrip(".")})
 
+    def load_dir(self, dir_path: str) -> List[Document]:
+        """扫描目录，加载所有受支持的文档。"""
+        docs = []
+        if not os.path.isdir(dir_path):
+            return docs
+        for name in sorted(os.listdir(dir_path)):
+            path = os.path.join(dir_path, name)
+            if not os.path.isfile(path):
+                continue
+            if os.path.splitext(name)[1].lower() not in self.SUPPORTED:
+                continue
+            try:
+                docs.append(self.load(path))
+                print(f"[加载] {name} OK")
+            except Exception as e:
+                print(f"[加载] {name} 失败: {e}")
+        return docs
 
-def _load_pdf(path: str, doc_name: str):
-    """按页解析PDF，每页一个片段，页码写入meta用于引用标注。"""
-    try:
+    @staticmethod
+    def _load_pdf(path: str):
+        """逐页抽取 PDF 文本（pypdf）。"""
         from pypdf import PdfReader
-    except ImportError:
-        raise RuntimeError("解析PDF需要安装 pypdf：pip install pypdf")
-
-    reader = PdfReader(path)
-    segments = []
-    for i, page in enumerate(reader.pages):
-        text = (page.extract_text() or "").strip()
-        if text:
-            segments.append((text, {"doc_name": doc_name, "page": i + 1}))
-    if not segments:
-        raise ValueError(f"{doc_name} 未解析出文本（可能是扫描版PDF，需要OCR）")
-    return segments
+        reader = PdfReader(path)
+        parts = []
+        for i, page in enumerate(reader.pages):
+            t = page.extract_text() or ""
+            if t.strip():
+                parts.append(f"[[第{i + 1}页]]\n{t}")
+        return "\n\n".join(parts), len(reader.pages)

@@ -1,84 +1,63 @@
-"""生成层：把检索到的证据 + 用户问题交给LLM，生成带引用的回答。
+"""生成模块：把检索到的文献片段 + 用户问题交给 LLM，生成带引用的回答。
 
-【面试必问】RAG如何控制幻觉？
-1. Prompt中明确要求"只依据提供的资料回答，资料不足就说不知道"
-2. 要求标注引用来源[1][2]，让答案可溯源、可核查
-3. 检索端设相似度阈值，宁缺毋滥（retriever.py中实现）
-4. 答案后处理：检查引用编号是否真实存在
-
-【面试考点】Prompt工程要点：
-- 系统提示定义角色与约束
-- 上下文按相关性排序注入
-- 输出格式约束（引用标注规范）
+设计要点（RAG 减少幻觉的关键约束）：
+1. System Prompt 明确要求"仅基于给定文献片段回答"；
+2. 片段带编号，要求回答中用 [1][2] 标注引用；
+3. 检索为空或片段不含答案时，明确说"文献中未提及"，禁止自由发挥。
 """
 import json
-import urllib.request
-from typing import List, Tuple
+from typing import List
 
-SYSTEM_PROMPT = """你是一个严谨的学术论文助手。请严格依据下方【参考资料】回答用户问题：
-1. 只使用资料中的信息，禁止编造资料外的内容
-2. 每个关键论断后用[编号]标注来源，编号对应资料序号
-3. 资料不足以回答时，明确说"根据现有资料无法回答"，并说明缺少什么信息
-4. 回答使用中文，条理清晰"""
+from .config import Config
+
+SYSTEM_PROMPT = (
+    "你是论文阅读助手。请仅基于下面给出的文献片段回答问题，"
+    "并在对应结论后用 [编号] 标注引用来源（如 [1][2]）。"
+    "如果片段不足以回答，请直接说明\"提供的文献片段中未涉及该问题\"，"
+    "不要编造。回答使用中文，专业术语可保留英文。"
+)
 
 
 class Generator:
-    def __init__(self, config):
+    def __init__(self, config: Config):
         self.config = config
 
-    def build_prompt(self, question: str,
-                     contexts: List[Tuple[str, dict, float]]) -> str:
-        """组装最终prompt：系统约束 + 编号上下文 + 问题。"""
-        parts = []
-        for i, (text, meta, score) in enumerate(contexts, 1):
-            src = f"{meta.get('doc_name', '?')} 第{meta.get('page', '?')}页"
-            parts.append(f"[{i}] (来源: {src}, 相关度{score:.2f})\n{text}")
-        ctx_block = "\n\n".join(parts)
-        return (f"{SYSTEM_PROMPT}\n\n【参考资料】\n{ctx_block}\n\n"
-                f"【用户问题】\n{question}")
-
-    def generate(self, question: str,
-                 contexts: List[Tuple[str, dict, float]]) -> str:
-        """调用LLM生成回答。无API key时返回基于证据的抽取式兜底答案。"""
+    # ---------------- 对外主入口 ----------------
+    def generate(self, question: str, contexts: List[dict]) -> dict:
         if not contexts:
-            return ("根据现有资料无法回答这个问题。"
-                    "（检索未找到足够相关的内容，请确认知识库中是否有相关文献，"
-                    "或尝试换一种问法）")
+            return {"answer": "未在知识库中检索到与问题相关的片段，"
+                              "请先上传文档或换个问法。", "model": "rule"}
+        if not self.config.api_key:
+            return self._extractive(question, contexts)
 
-        prompt = self.build_prompt(question, contexts)
-        if self.config.api_key:
-            try:
-                return self._call_llm(prompt)
-            except Exception as e:
-                return (f"【LLM调用失败: {e}，以下为检索到的原始证据】\n\n"
-                        + self._fallback_answer(contexts))
-        return self._fallback_answer(contexts)
+        context_text = "\n\n".join(
+            f"[{i + 1}] 来源: {c['source']} (块{c['seq']})\n{c['text']}"
+            for i, c in enumerate(contexts))
+        user_prompt = f"文献片段：\n{context_text}\n\n问题：{question}"
+        answer = self._chat(
+            [{"role": "system", "content": SYSTEM_PROMPT},
+             {"role": "user", "content": user_prompt}])
+        return {"answer": answer, "model": self.config.chat_model}
 
-    def _call_llm(self, prompt: str) -> str:
-        """调用OpenAI兼容的 /chat/completions 接口。"""
-        req = urllib.request.Request(
+    # ---------------- LLM 调用（OpenAI 兼容协议） ----------------
+    def _chat(self, messages: List[dict]) -> str:
+        import requests
+        resp = requests.post(
             f"{self.config.base_url.rstrip('/')}/chat/completions",
-            data=json.dumps({
-                "model": self.config.chat_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,  # 低温度 -> 更忠实于资料，减少发散
-            }).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"].strip()
+            headers={"Authorization": f"Bearer {self.config.api_key}"},
+            json={"model": self.config.chat_model,
+                  "messages": messages,
+                  "temperature": self.config.temperature},
+            timeout=self.config.timeout)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
+    # ---------------- 无 API Key 时的抽取式兜底 ----------------
     @staticmethod
-    def _fallback_answer(contexts) -> str:
-        """无LLM时的兜底：直接展示最相关的证据块（抽取式回答）。"""
-        lines = ["（未配置LLM API key，以下为检索到的最相关原文片段）\n"]
-        for i, (text, meta, score) in enumerate(contexts, 1):
-            src = f"{meta.get('doc_name', '?')} 第{meta.get('page', '?')}页"
-            snippet = text[:300] + ("..." if len(text) > 300 else "")
-            lines.append(f"[{i}] 来源: {src} (相关度{score:.2f})\n{snippet}\n")
-        return "\n".join(lines)
+    def _extractive(question: str, contexts: List[dict]) -> dict:
+        """没有 LLM 时，直接把最相关的片段作为回答（纯检索模式）。"""
+        lines = ["（未配置 LLM API Key，以下为最相关的原文片段）"]
+        for i, c in enumerate(contexts[:3]):
+            snippet = c["text"][:300].replace("\n", " ")
+            lines.append(f"[{i + 1}] {c['source']}: {snippet}...")
+        return {"answer": "\n\n".join(lines), "model": "extractive"}

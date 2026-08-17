@@ -3,207 +3,146 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PaperMind · 学术论文智能问答</title>
+<title>PaperMind · CV 异常检测论文问答</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: #0f1420; color: #e8eaf0; height: 100vh;
-    display: flex; flex-direction: column;
-  }
-  header {
-    padding: 14px 24px; background: #161c2c; border-bottom: 1px solid #232b42;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  header h1 { font-size: 18px; font-weight: 600; }
-  header h1 span { color: #6c8cff; }
-  #status-bar { font-size: 12px; color: #8a93ad; }
-  main { flex: 1; display: flex; overflow: hidden; }
-
-  /* 左侧：知识库面板 */
-  aside {
-    width: 280px; background: #131928; border-right: 1px solid #232b42;
-    padding: 16px; display: flex; flex-direction: column; gap: 12px;
-  }
-  aside h2 { font-size: 13px; color: #8a93ad; font-weight: 500; }
-  #drop-zone {
-    border: 2px dashed #33406a; border-radius: 10px; padding: 22px 12px;
-    text-align: center; font-size: 13px; color: #8a93ad; cursor: pointer;
-    transition: all .2s;
-  }
-  #drop-zone:hover, #drop-zone.dragover { border-color: #6c8cff; color: #c3cdf5; background: #1a2340; }
-  #doc-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-  .doc-item {
-    background: #1a2136; border-radius: 8px; padding: 8px 10px; font-size: 12px;
-    display: flex; justify-content: space-between; align-items: center; gap: 6px;
-  }
-  .doc-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .doc-item .chunks { color: #6c8cff; flex-shrink: 0; }
-  #reset-btn {
-    background: none; border: 1px solid #3a2b3a; color: #c98a8a; border-radius: 8px;
-    padding: 7px; font-size: 12px; cursor: pointer;
-  }
-  #reset-btn:hover { background: #2a1a24; }
-
-  /* 右侧：对话区 */
-  section { flex: 1; display: flex; flex-direction: column; }
-  #chat { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
-  .msg { max-width: 78%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
-  .msg.user { align-self: flex-end; background: #2b4a9e; border-bottom-right-radius: 4px; }
-  .msg.bot { align-self: flex-start; background: #1a2136; border-bottom-left-radius: 4px; }
-  .msg.bot .meta { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a3352; font-size: 12px; color: #8a93ad; }
-  .msg.bot .src { display: block; margin-top: 3px; color: #6c8cff; }
-  .msg.error { background: #3a2030; }
-
-  #input-bar { padding: 16px 24px; background: #131928; border-top: 1px solid #232b42; display: flex; gap: 10px; }
-  #question {
-    flex: 1; background: #1a2136; border: 1px solid #2a3352; border-radius: 10px;
-    padding: 12px 14px; color: #e8eaf0; font-size: 14px; outline: none; resize: none;
-  }
-  #question:focus { border-color: #6c8cff; }
-  #ask-btn {
-    background: #4a6cf0; border: none; color: #fff; border-radius: 10px;
-    padding: 0 26px; font-size: 14px; cursor: pointer; font-weight: 500;
-  }
-  #ask-btn:hover { background: #5a7cff; }
-  #ask-btn:disabled { background: #333c58; cursor: not-allowed; }
-  .hint { text-align: center; color: #566080; font-size: 13px; margin-top: 60px; }
+  :root { --bg:#0f1117; --card:#171a23; --line:#2a2f3d; --fg:#e8eaf0;
+          --muted:#9aa3b5; --accent:#6c8cff; --accent2:#4f6ef7; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--fg); font-family:"PingFang SC",
+         "Microsoft YaHei", system-ui, sans-serif; min-height:100vh; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 20px 60px; }
+  header { display:flex; align-items:baseline; gap:14px; margin-bottom:6px; }
+  h1 { font-size:26px; letter-spacing:.5px; }
+  h1 span { color:var(--accent); }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .card { background:var(--card); border:1px solid var(--line);
+          border-radius:12px; padding:18px 20px; margin-bottom:16px; }
+  .card h2 { font-size:14px; color:var(--muted); font-weight:600;
+             margin-bottom:12px; letter-spacing:.5px; }
+  .stats { display:flex; flex-wrap:wrap; gap:10px; }
+  .pill { background:#1e2330; border:1px solid var(--line); border-radius:999px;
+          padding:5px 12px; font-size:12.5px; color:var(--muted); }
+  .pill b { color:var(--fg); font-weight:600; }
+  textarea { width:100%; background:#11141c; color:var(--fg);
+             border:1px solid var(--line); border-radius:8px;
+             padding:12px 14px; font-size:14.5px; resize:vertical;
+             min-height:64px; outline:none; line-height:1.6; }
+  textarea:focus { border-color:var(--accent); }
+  .row { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;
+         align-items:center; }
+  button { background:var(--accent2); border:none; color:#fff;
+           border-radius:8px; padding:10px 22px; font-size:14px;
+           cursor:pointer; transition:.15s; }
+  button:hover { background:var(--accent); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { background:transparent; border:1px solid var(--line);
+                 color:var(--muted); }
+  button.ghost:hover { border-color:var(--accent); color:var(--fg); }
+  #drop { border:1.5px dashed var(--line); border-radius:10px;
+          padding:22px; text-align:center; color:var(--muted);
+          font-size:13.5px; transition:.15s; cursor:pointer; }
+  #drop.over { border-color:var(--accent); color:var(--accent); }
+  #answer { font-size:14.5px; line-height:1.85; white-space:pre-wrap; }
+  .src { border-top:1px solid var(--line); margin-top:14px; padding-top:12px; }
+  .src-item { font-size:12.5px; color:var(--muted); margin-bottom:8px;
+              line-height:1.55; }
+  .src-item b { color:var(--accent); }
+  .tag { display:inline-block; background:#1e2330; border:1px solid var(--line);
+         border-radius:4px; padding:1px 7px; margin-right:6px; font-size:11.5px; }
+  .hint { font-size:12px; color:var(--muted); margin-top:8px; }
+  .ok { color:#67c98a; } .err { color:#e06c6c; }
 </style>
 </head>
 <body>
-<header>
-  <h1>📚 Paper<span>Mind</span> · 学术论文智能问答</h1>
-  <div id="status-bar">加载中...</div>
-</header>
-<main>
-  <aside>
-    <h2>知识库</h2>
-    <div id="drop-zone">点击或拖拽上传论文<br><small>支持 PDF / TXT / MD</small></div>
-    <input type="file" id="file-input" multiple accept=".pdf,.txt,.md" hidden>
-    <div id="doc-list"></div>
-    <button id="reset-btn">清空知识库</button>
-  </aside>
-  <section>
-    <div id="chat">
-      <div class="hint">上传论文后，向你的文献提问吧<br>答案会标注引用来源 [1][2]，可溯源核查</div>
+<div class="wrap">
+  <header><h1>Paper<span>Mind</span></h1></header>
+  <div class="sub">计算机视觉异常检测论文 RAG 问答系统 · 检索增强生成 · 引用可溯源</div>
+
+  <div class="card">
+    <h2>知识库状态</h2>
+    <div class="stats" id="stats">加载中…</div>
+  </div>
+
+  <div class="card">
+    <h2>上传论文（PDF / TXT / MD，支持多选与拖拽）</h2>
+    <div id="drop">点击选择或将文件拖到这里，上传后自动摄入知识库</div>
+    <input type="file" id="file" multiple accept=".pdf,.txt,.md" hidden>
+    <div class="hint" id="upmsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>提问</h2>
+    <textarea id="q" placeholder="例如：PatchCore 是如何用 memory bank 做异常检测的？"></textarea>
+    <div class="row">
+      <button id="ask">提问</button>
+      <button class="ghost" id="demo">示例问题</button>
+      <span class="hint" id="qmsg"></span>
     </div>
-    <div id="input-bar">
-      <textarea id="question" rows="1" placeholder="输入你的问题，回车发送（Shift+回车换行）"></textarea>
-      <button id="ask-btn">提问</button>
-    </div>
-  </section>
-</main>
+  </div>
+
+  <div class="card" id="anscard" hidden>
+    <h2>回答</h2>
+    <div id="answer"></div>
+    <div class="src" id="sources"></div>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
-const chat = $('chat'), statusBar = $('status-bar');
-
-// ---------- 状态栏与文档列表 ----------
-async function refreshStatus() {
-  const s = await (await fetch('/api/status')).json();
-  statusBar.textContent = s.has_api_key
-    ? `知识库 ${s.total_chunks} 块 · 模型 ${s.chat_model}`
-    : `知识库 ${s.total_chunks} 块 · ⚠未配置API Key（仅检索模式）`;
-  const list = $('doc-list');
-  list.innerHTML = '';
-  s.documents.forEach(name => {
-    const div = document.createElement('div');
-    div.className = 'doc-item';
-    div.innerHTML = `<span class="name" title="${name}">📄 ${name}</span>`;
-    list.appendChild(div);
-  });
+async function refreshStats() {
+  const r = await fetch('/api/stats').then(r => r.json());
+  $('stats').innerHTML =
+    `<span class="pill">文本块 <b>${r.chunks}</b></span>` +
+    `<span class="pill">文档 <b>${r.sources.length}</b></span>` +
+    `<span class="pill">嵌入模式 <b>${r.embed_mode}</b></span>` +
+    `<span class="pill">生成模型 <b>${r.llm_model}</b></span>` +
+    (r.sources||[]).map(s=>`<span class="pill">${s}</span>`).join('');
 }
-
-// ---------- 上传 ----------
-const dropZone = $('drop-zone'), fileInput = $('file-input');
-dropZone.onclick = () => fileInput.click();
-dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
-dropZone.ondragleave = () => dropZone.classList.remove('dragover');
-dropZone.ondrop = e => {
-  e.preventDefault(); dropZone.classList.remove('dragover');
-  uploadFiles(e.dataTransfer.files);
-};
-fileInput.onchange = () => { uploadFiles(fileInput.files); fileInput.value = ''; };
-
-async function uploadFiles(files) {
+async function ask() {
+  const q = $('q').value.trim();
+  if (!q) return;
+  $('ask').disabled = true; $('qmsg').textContent = '检索 + 生成中…';
+  $('anscard').hidden = false; $('answer').textContent = '思考中…'; $('sources').innerHTML = '';
+  try {
+    const r = await fetch('/api/query', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({question: q})}).then(r=>r.json());
+    if (!r.ok) throw new Error(r.error);
+    $('answer').textContent = r.answer;
+    $('sources').innerHTML = '<h2>引用来源</h2>' + (r.sources||[]).map((s,i) =>
+      `<div class="src-item"><span class="tag">[${i+1}] ${s.score}</span>` +
+      `<b>${s.source}</b> · 块${s.seq}<br>${s.snippet}…</div>`).join('') +
+      `<div class="hint">嵌入:${r.embed_mode} | 模型:${r.model} | 耗时:${r.elapsed}s</div>`;
+    $('qmsg').innerHTML = `<span class="ok">完成 (${r.elapsed}s)</span>`;
+  } catch (e) {
+    $('answer').textContent = '出错了：' + e.message;
+    $('qmsg').innerHTML = `<span class="err">失败</span>`;
+  } finally { $('ask').disabled = false; }
+}
+async function upload(files) {
   if (!files.length) return;
   const fd = new FormData();
   [...files].forEach(f => fd.append('files', f));
-  dropZone.textContent = '解析并建立索引中...';
-  try {
-    const r = await (await fetch('/api/upload', { method: 'POST', body: fd })).json();
-    const msgs = [];
-    r.ingested.forEach(i => msgs.push(`✅ ${i.doc_name}：切分为 ${i.chunks} 块（${i.elapsed}s）`));
-    r.errors.forEach(e => msgs.push(`❌ ${e}`));
-    addMsg('bot', msgs.join('\n'));
-  } catch (e) {
-    addMsg('bot error', '上传失败: ' + e);
-  }
-  dropZone.innerHTML = '点击或拖拽上传论文<br><small>支持 PDF / TXT / MD</small>';
-  refreshStatus();
+  $('upmsg').textContent = '上传并嵌入中（首次会下载本地嵌入模型）…';
+  const r = await fetch('/api/ingest', {method:'POST', body:fd}).then(r=>r.json());
+  if (r.ok) {
+    const s = r.stats;
+    $('upmsg').innerHTML = `<span class="ok">已摄入 ${s.docs} 篇 → ${s.chunks} 块 ` +
+      `(${s.embed_mode}, ${s.elapsed}s)</span>`;
+    refreshStats();
+  } else $('upmsg').innerHTML = `<span class="err">失败</span>`;
 }
-
-// ---------- 问答 ----------
-function addMsg(role, text, sources) {
-  const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  div.textContent = text;
-  if (sources && sources.length) {
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.innerHTML = '<b>引用来源：</b>';
-    sources.forEach((s, i) => {
-      const span = document.createElement('span');
-      span.className = 'src';
-      span.textContent = `[${i + 1}] ${s.doc_name} 第${s.page}页 · 相关度 ${s.score}`;
-      meta.appendChild(span);
-    });
-    div.appendChild(meta);
-  }
-  const hint = chat.querySelector('.hint');
-  if (hint) hint.remove();
-  chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight;
-  return div;
-}
-
-async function ask() {
-  const q = $('question').value.trim();
-  if (!q) return;
-  $('question').value = '';
-  addMsg('user', q);
-  const btn = $('ask-btn');
-  btn.disabled = true; btn.textContent = '思考中...';
-  const loading = addMsg('bot', '正在检索文献并生成回答...');
-  try {
-    const resp = await fetch('/api/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q }),
-    });
-    const r = await resp.json();
-    loading.remove();
-    if (r.error) addMsg('bot error', r.error);
-    else addMsg('bot', `${r.answer}\n\n（耗时 ${r.elapsed}s）`, r.sources);
-  } catch (e) {
-    loading.remove();
-    addMsg('bot error', '请求失败: ' + e);
-  }
-  btn.disabled = false; btn.textContent = '提问';
-}
-
-$('ask-btn').onclick = ask;
-$('question').onkeydown = e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
-};
-$('reset-btn').onclick = async () => {
-  if (!confirm('确定清空知识库？')) return;
-  await fetch('/api/reset', { method: 'POST' });
-  chat.innerHTML = '<div class="hint">知识库已清空，请重新上传论文</div>';
-  refreshStatus();
-};
-
-refreshStatus();
+$('ask').onclick = ask;
+$('q').addEventListener('keydown', e => { if (e.key==='Enter' && (e.metaKey||e.ctrlKey)) ask(); });
+$('demo').onclick = () => { $('q').value = 'PatchCore 是如何利用 memory bank 和 coreset 做工业异常检测的？和 PaDiM 相比有什么优势？'; };
+$('drop').onclick = () => $('file').click();
+$('file').onchange = e => upload(e.target.files);
+['dragover','dragleave','drop'].forEach(ev => $('drop').addEventListener(ev, e => {
+  e.preventDefault();
+  $('drop').classList.toggle('over', ev==='dragover');
+  if (ev==='drop') upload(e.dataTransfer.files);
+}));
+refreshStats();
 </script>
 </body>
 </html>

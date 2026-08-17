@@ -1,71 +1,97 @@
-"""嵌入层：把文本变成向量（语义表示）。
+"""文本嵌入模块：三级降级策略。
 
-【面试必问】什么是Embedding？
-嵌入模型把一段文本映射为高维稠密向量，语义相近的文本在向量空间中距离更近。
-RAG的检索本质就是：把用户问题也变成向量，找空间里最近的文档块。
-
-【面试必问】为什么不用关键词检索（BM25）？
-- 关键词检索依赖字面匹配，"汽车"搜不到"轿车"
-- 向量检索理解语义，能处理同义改写、跨语言
-- 实践中常用"混合检索"：BM25召回字面相关 + 向量召回语义相关，再融合排序
-
-本模块支持两种后端：
-1. API嵌入（OpenAI兼容接口）——效果好，需联网
-2. 本地哈希嵌入——零依赖兜底，仅用于离线演示流程
+1. API 嵌入（OpenAI 兼容 /embeddings 端点，需单独配置嵌入服务商）
+2. 本地语义模型（fastembed + ONNX Runtime，无需 torch；
+   默认多语言模型 paraphrase-multilingual-MiniLM-L12-v2，
+   支持 中文问句 <-> 英文论文 的跨语言语义检索）
+3. 哈希嵌入（词/字符 n-gram 哈希投影，纯离线兜底，
+   保证无网络、无依赖时系统仍可运行——但只有词面重叠没有语义）
 """
 import hashlib
-import math
+import re
 from typing import List
+
+from .config import Config
 
 
 class Embedder:
-    def __init__(self, config):
+    def __init__(self, config: Config):
         self.config = config
-        self.dim = 256  # 本地兜底嵌入的维度
+        self._local_model = None
+        self._api_failed = not (config.embed_api_key and config.embed_base_url)
+        self._local_failed = False
+        self.mode = "auto"  # 首次嵌入后变为 api / local / hash
 
+    # ---------------- 对外主入口 ----------------
     def embed(self, texts: List[str]) -> List[List[float]]:
-        """批量嵌入。优先API，失败/未配置时降级为本地哈希嵌入。"""
-        if self.config.api_key:
+        """批量嵌入，三级降级：API -> 本地语义模型 -> 哈希兜底。"""
+        if not texts:
+            return []
+        # 第一级：API 嵌入（配置了且未失败过）
+        if not self._api_failed:
             try:
-                return self._embed_api(texts)
+                vecs = self._embed_api(texts)
+                self.mode = "api"
+                return vecs
             except Exception as e:
-                print(f"[嵌入] API调用失败({e})，降级为本地哈希嵌入")
+                self._api_failed = True
+                print(f"[嵌入] API不可用({e})，切换本地语义嵌入模型")
+        # 第二级：本地语义嵌入（fastembed）
+        if not self._local_failed:
+            try:
+                vecs = self._embed_local(texts)
+                self.mode = "local"
+                return vecs
+            except Exception as e:
+                self._local_failed = True
+                print(f"[嵌入] 本地模型不可用({e})，降级为哈希嵌入")
+        # 第三级：哈希兜底
+        self.mode = "hash"
         return [self._hash_embed(t) for t in texts]
 
+    # ---------------- 第一级：API ----------------
     def _embed_api(self, texts: List[str]) -> List[List[float]]:
-        """调用OpenAI兼容的 /embeddings 接口。"""
-        import json
-        import urllib.request
+        import requests
+        out = []
+        for i in range(0, len(texts), 32):  # 分批，避免单请求过大
+            batch = texts[i:i + 32]
+            resp = requests.post(
+                f"{self.config.embed_base_url.rstrip('/')}/embeddings",
+                headers={"Authorization": f"Bearer {self.config.embed_api_key}"},
+                json={"model": self.config.embed_api_model, "input": batch},
+                timeout=30)
+            resp.raise_for_status()
+            data = sorted(resp.json()["data"], key=lambda x: x["index"])
+            out.extend(d["embedding"] for d in data)
+        return out
 
-        req = urllib.request.Request(
-            f"{self.config.base_url.rstrip('/')}/embeddings",
-            data=json.dumps({
-                "model": self.config.embed_model,
-                "input": texts,
-            }).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        # 按index排序，保证返回顺序与输入一致（批量API可能乱序返回）
-        items = sorted(data["data"], key=lambda x: x["index"])
-        return [item["embedding"] for item in items]
+    # ---------------- 第二级：本地语义模型 ----------------
+    def _embed_local(self, texts: List[str]) -> List[List[float]]:
+        """fastembed：基于 ONNX Runtime 的轻量推理，无 torch 依赖。"""
+        if self._local_model is None:
+            from fastembed import TextEmbedding
+            print(f"[嵌入] 加载本地语义模型: {self.config.local_embed_model}"
+                  "（首次运行需下载权重）")
+            self._local_model = TextEmbedding(
+                model_name=self.config.local_embed_model)
+        vectors = list(self._local_model.embed(texts))
+        return [v.tolist() for v in vectors]
 
+    # ---------------- 第三级：哈希兜底 ----------------
     def _hash_embed(self, text: str) -> List[float]:
-        """本地兜底：字符n-gram哈希到固定维度向量（词袋近似）。
+        """词 + 字符3-gram 哈希到固定维向量，TF 加权后 L2 归一化。
 
-        原理：把文本拆成2-gram，每个gram哈希到一个维度上累加，最后L2归一化。
-        优点：零依赖、确定性；缺点：只有字面重叠信号，没有真正语义理解。
-        仅用于无API key时跑通流程，面试时务必讲清它与真实嵌入模型的区别。
+        语义能力有限（仅词面匹配），但确定性、零依赖、可离线。
         """
-        vec = [0.0] * self.dim
-        grams = [text[i:i + 2] for i in range(max(len(text) - 1, 1))] or [text]
-        for gram in grams:
-            h = int(hashlib.md5(gram.encode("utf-8")).hexdigest(), 16)
-            vec[h % self.dim] += 1.0
-        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        dim = self.config.hash_embed_dim
+        vec = [0.0] * dim
+        words = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+        tokens = list(words)
+        for w in words:  # 中英文字符3-gram，缓解中英词表不齐
+            if len(w) > 3:
+                tokens.extend(w[i:i + 3] for i in range(len(w) - 2))
+        for tok in tokens:
+            h = int(hashlib.md5(tok.encode("utf-8")).hexdigest(), 16)
+            vec[h % dim] += 1.0
+        norm = sum(v * v for v in vec) ** 0.5 or 1.0
         return [v / norm for v in vec]

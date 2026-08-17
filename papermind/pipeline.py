@@ -1,106 +1,89 @@
-"""RAG管线：把 加载->分块->嵌入->存储->检索->生成 串成完整链路。
-
-【面试必问】请完整描述RAG的工作流程？
-离线索引阶段：文档解析 -> 分块 -> 向量化 -> 存入向量库
-在线问答阶段：问题向量化 -> 相似度检索Top-K -> 组装Prompt -> LLM生成带引用答案
-
-本类就是这条链路的代码化，每个环节对应一个独立模块，便于单独讲解与替换。
-"""
+"""RAG 编排模块：串起 加载->分块->嵌入->入库 与 检索->生成 两条链路。"""
 import os
 import time
-from typing import List
+from typing import List, Optional
 
+from .chunker import Chunker
 from .config import Config
-from .loader import load_file
-from .chunker import RecursiveChunker
 from .embeddings import Embedder
-from .vectorstore import VectorStore
-from .retriever import Retriever
 from .generator import Generator
+from .loader import Loader
+from .retriever import Retriever
+from .vectorstore import VectorStore
 
 
 class RAGPipeline:
-    def __init__(self, config: Config = None):
+    def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
-        os.makedirs(self.config.data_dir, exist_ok=True)
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.data_dir = os.path.join(_root, self.config.data_dir)
+        self.index_dir = os.path.join(_root, self.config.index_dir)
+
+        self.loader = Loader()
+        self.chunker = Chunker(self.config.chunk_size, self.config.chunk_overlap)
         self.embedder = Embedder(self.config)
-        self.store = VectorStore(os.path.join(self.config.data_dir, "index.npy"))
-        self.retriever = Retriever(self.store, self.embedder, self.config)
+        self.store = VectorStore(dim=self.config.hash_embed_dim)  # dim 会随实际嵌入自适应
+        self.retriever = Retriever(self.config, self.embedder, self.store)
         self.generator = Generator(self.config)
-        self.chunker = RecursiveChunker(self.config.chunk_size,
-                                        self.config.chunk_overlap)
-        self.documents: List[str] = []  # 已入库的文档名
-        self.store.load()
-        self._sync_doc_list()
 
-    # ---------- 索引阶段 ----------
-    def ingest(self, path: str) -> dict:
-        """摄入一个文档：解析->分块->嵌入->入库->持久化。"""
+        self._load_index()
+
+    # ================= 链路一：摄入 =================
+    def ingest(self, paths: Optional[List[str]] = None) -> dict:
+        """加载文档 -> 分块 -> 嵌入 -> 入库 -> 持久化。"""
         t0 = time.time()
-        segments = load_file(path)          # 1. 解析
-        chunks, metas = [], []
-        for text, meta in segments:         # 2. 分块
-            for chunk in self.chunker.split(text):
-                chunks.append(chunk)
-                metas.append(meta)
-        if not chunks:
-            raise ValueError("文档切块后为空")
-        vectors = self._embed_batch(chunks)  # 3. 嵌入（分批，避免单次请求过大）
-        self.store.add(chunks, vectors, metas)  # 4. 入库
-        self.store.save()                       # 5. 持久化
-        doc_name = os.path.basename(path)
-        if doc_name not in self.documents:
-            self.documents.append(doc_name)
-        return {
-            "doc_name": doc_name,
-            "chunks": len(chunks),
-            "elapsed": round(time.time() - t0, 2),
-            "total_chunks": len(self.store),
-        }
+        docs = ([self.loader.load(p) for p in paths]
+                if paths else self.loader.load_dir(self.data_dir))
+        if not docs:
+            return {"docs": 0, "chunks": 0, "elapsed": 0.0,
+                    "message": "没有可加载的文档"}
 
-    def _embed_batch(self, chunks: List[str], batch: int = 64) -> List[List[float]]:
-        """分批嵌入：API有单次请求大小限制，分批更稳。"""
-        vectors = []
-        for i in range(0, len(chunks), batch):
-            vectors.extend(self.embedder.embed(chunks[i:i + batch]))
-        return vectors
+        all_chunks = []
+        for d in docs:
+            all_chunks.extend(self.chunker.split(d))
 
-    # ---------- 问答阶段 ----------
-    def ask(self, question: str) -> dict:
-        """完整问答：检索 -> 生成，并返回引用来源供前端展示。"""
+        # 嵌入（内部自动选择 api/local/hash）
+        vectors = self.embedder.embed([c.text for c in all_chunks])
+        if len(self.store) == 0:  # 首次入库：以真实向量维度建库
+            self.store = VectorStore(dim=len(vectors[0]))
+            self.store.add(all_chunks, vectors)
+            self.retriever.store = self.store
+        else:
+            self.store.add(all_chunks, vectors)
+
+        self.store.save(self.index_dir)
+        elapsed = round(time.time() - t0, 2)
+        return {"docs": len(docs), "chunks": len(all_chunks),
+                "sources": self.store.sources, "embed_mode": self.embedder.mode,
+                "elapsed": elapsed}
+
+    # ================= 链路二：问答 =================
+    def query(self, question: str) -> dict:
         t0 = time.time()
         contexts = self.retriever.retrieve(question)
-        answer = self.generator.generate(question, contexts)
-        sources = [
-            {"doc_name": m.get("doc_name"), "page": m.get("page"),
-             "score": round(s, 3), "snippet": t[:120]}
-            for t, m, s in contexts
-        ]
+        result = self.generator.generate(question, contexts)
         return {
-            "answer": answer,
-            "sources": sources,
+            "answer": result["answer"],
+            "model": result["model"],
+            "sources": [{"source": c["source"], "seq": c["seq"],
+                         "score": c["score"],
+                         "snippet": c["text"][:150].replace("\n", " ")}
+                        for c in contexts],
+            "embed_mode": self.embedder.mode,
+            "chunks_in_store": len(self.store),
             "elapsed": round(time.time() - t0, 2),
         }
 
-    # ---------- 管理 ----------
-    def status(self) -> dict:
-        return {
-            "documents": self.documents,
-            "total_chunks": len(self.store),
-            "has_api_key": bool(self.config.api_key),
-            "chat_model": self.config.chat_model,
-            "embed_model": self.config.embed_model,
-        }
-
-    def reset(self):
-        self.store.clear()
-        self.documents = []
-
-    def _sync_doc_list(self):
-        """从已加载的索引元数据恢复文档列表（重启后不丢）。"""
-        seen = []
-        for meta in self.store.metas:
-            name = meta.get("doc_name")
-            if name and name not in seen:
-                seen.append(name)
-        self.documents = seen
+    # ================= 索引持久化 =================
+    def _load_index(self):
+        if self.store.load(self.index_dir):
+            print(f"[索引] 已加载 {len(self.store)} 个块 "
+                  f"({', '.join(self.store.sources[:5])}...)")
+            return
+        # 库为空且数据目录有文档时自动摄入（只查文件名，避免重复解析）
+        if os.path.isdir(self.data_dir) and any(
+                os.path.splitext(n)[1].lower() in self.loader.SUPPORTED
+                for n in os.listdir(self.data_dir)):
+            stats = self.ingest()
+            print(f"[索引] 自动摄入完成: {stats['docs']} 篇 / "
+                  f"{stats['chunks']} 块")

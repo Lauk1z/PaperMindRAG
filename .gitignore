@@ -1,6 +1,13 @@
-__pycache__/
-*.pyc
-data/
+# 敏感信息
 .env
-*.npy
-*.meta.json
+
+# 运行时数据
+data/
+*.pyc
+__pycache/
+.venv/
+venv/
+
+# fastembed / HF 模型缓存
+.local_cache/
+models/

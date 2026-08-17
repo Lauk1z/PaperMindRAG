@@ -1,72 +1,63 @@
-"""文本分块层：把长文档切成适合向量化与检索的小块。
+"""文本分块模块：递归字符分割（Recursive Character Splitting）。
 
-【面试必问】为什么要分块？
-1. 嵌入模型有输入长度限制，且长文本的向量会"语义稀释"
-2. 检索需要细粒度定位——整篇文档当一个块，等于没有检索
-3. LLM上下文有限，只能把最相关的几块喂给它
-
-本实现采用"递归字符分块"（RecursiveCharacterTextSplitter思想）：
-优先按段落切 -> 段落太长按句子切 -> 再太长按词切，
-尽量让每个块的边界落在自然语义边界上。
+思路：优先在天然边界（段落->句子->空格）处切分，
+只有块超长时才降级到更细的边界，尽量保持语义完整；
+相邻块保留 overlap，避免关键句被拦腰截断导致检索丢上下文。
 """
+from dataclasses import dataclass, field
 from typing import List
 
+from .loader import Document
 
-class RecursiveChunker:
-    # 分隔符按"语义完整性"从大到小排列
-    SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ".", "!", "?", ";", " ", ""]
+SEPARATORS = ["\n\n", "\n", "。", ". ", "；", "; ", "，", " ", ""]
 
-    def __init__(self, chunk_size: int = 500, overlap: int = 80):
-        if overlap >= chunk_size:
-            raise ValueError("overlap必须小于chunk_size")
-        self.chunk_size = chunk_size
-        self.overlap = overlap
 
-    def split(self, text: str) -> List[str]:
-        text = text.strip()
-        if not text:
-            return []
-        raw = self._split_recursive(text, 0)
-        return self._merge_with_overlap(raw)
+@dataclass
+class Chunk:
+    """一个可检索的文本块。"""
+    text: str
+    source: str              # 所属文档名（引用溯源用）
+    seq: int                 # 在文档中的块序号
+    meta: dict = field(default_factory=dict)
 
-    def _split_recursive(self, text: str, sep_idx: int) -> List[str]:
-        """递归：用当前级别的分隔符切；切出的块仍超长，就用下一级分隔符继续切。"""
-        if len(text) <= self.chunk_size:
-            return [text] if text.strip() else []
 
-        sep = self.SEPARATORS[sep_idx]
-        if sep == "":
-            # 最后兜底：硬切
-            return [text[i:i + self.chunk_size]
-                    for i in range(0, len(text), self.chunk_size)]
+class Chunker:
+    def __init__(self, chunk_size: int = 800, chunk_overlap: int = 120):
+        self.size = chunk_size
+        self.overlap = min(chunk_overlap, chunk_size // 2)
 
-        parts = text.split(sep)
-        result = []
-        for part in parts:
-            piece = part if sep == "\n" else part + sep
-            if len(piece) <= self.chunk_size:
-                if piece.strip():
-                    result.append(piece)
-            else:
-                # 当前块仍超长，交给下一级分隔符
-                result.extend(self._split_recursive(piece, sep_idx + 1))
-        return result
-
-    def _merge_with_overlap(self, pieces: List[str]) -> List[str]:
-        """把过小的相邻片段合并到目标大小，并在块之间制造重叠。
-
-        重叠的作用：关键句子即使落在块边界上，也至少完整存在于某一个块中。
-        """
-        chunks = []
-        buf = ""
+    def split(self, doc: Document) -> List[Chunk]:
+        pieces = self._split_recursive(doc.text, SEPARATORS)
+        # 合并过碎的片段 + 加重叠，组装成最终块
+        chunks, buf = [], ""
         for piece in pieces:
-            if len(buf) + len(piece) <= self.chunk_size:
-                buf += piece
+            candidate = (buf + " " + piece).strip() if buf else piece.strip()
+            if len(candidate) >= self.size - self.overlap:
+                chunks.append(candidate)
+                buf = candidate[-self.overlap:] if self.overlap else ""
             else:
-                if buf.strip():
-                    chunks.append(buf.strip())
-                # 取上一块尾部overlap个字符作为新块开头（重叠）
-                buf = buf[-self.overlap:] + piece if buf else piece
+                buf = candidate
         if buf.strip():
             chunks.append(buf.strip())
-        return chunks
+        return [Chunk(text=t, source=doc.source, seq=i, meta={
+            "pages": doc.pages, **doc.meta})
+            for i, t in enumerate(chunks) if len(t.strip()) > 20]
+
+    def _split_recursive(self, text: str, seps: List[str]) -> List[str]:
+        """递归分割：用当前层分隔符切分，仍超长的子串降级到下一层。"""
+        if len(text) <= self.size:
+            return [text]
+        if not seps:
+            return [text[i:i + self.size]
+                    for i in range(0, len(text), self.size - self.overlap)]
+        sep, rest = seps[0], seps[1:]
+        parts = text.split(sep) if sep else list(text)
+        out = []
+        for p in parts:
+            if not p.strip():
+                continue
+            if len(p) <= self.size:
+                out.append(p)
+            else:
+                out.extend(self._split_recursive(p, rest))
+        return out
