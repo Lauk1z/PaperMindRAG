@@ -11,3 +11,8 @@ venv/
 # fastembed / HF 模型缓存
 .local_cache/
 models/
+
+# pip 构建产物
+*.egg-info/
+build/
+dist/
