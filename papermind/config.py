@@ -64,6 +64,9 @@ class Config:
     # ---------- 检索 ----------
     top_k: int = int(os.environ.get("PM_TOP_K", "5"))
     score_threshold: float = float(os.environ.get("PM_SCORE_THRESHOLD", "0.30"))
+    # 检索模式: hybrid(BM25+稠密RRF融合) | dense(纯向量) | bm25(纯词面)
+    retrieval_mode: str = os.environ.get("PM_RETRIEVAL_MODE", "hybrid")
+    rrf_k: int = int(os.environ.get("PM_RRF_K", "60"))  # RRF 平滑常数
 
     # ---------- 生成 ----------
     temperature: float = 0.3
@@ -84,5 +87,7 @@ class Config:
             errors.append("top_k 必须为正")
         if not 0.0 <= self.score_threshold < 1.0:
             errors.append("score_threshold 须在 [0, 1)")
+        if self.retrieval_mode not in ("hybrid", "dense", "bm25"):
+            errors.append("retrieval_mode 须为 hybrid/dense/bm25")
         if errors:
             raise ValueError("配置校验失败: " + "; ".join(errors))

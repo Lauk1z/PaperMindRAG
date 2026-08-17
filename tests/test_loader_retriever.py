@@ -48,7 +48,7 @@ class StubEmbedder:
 
 
 def test_retriever_filters_below_threshold():
-    cfg = Config(top_k=5, score_threshold=0.5)
+    cfg = Config(retrieval_mode="dense", top_k=5, score_threshold=0.5)
     store = VectorStore(dim=2)
     from papermind.chunker import Chunk
     store.add([Chunk(text="query", source="a.pdf", seq=0)], [[1.0, 0.0]])
@@ -62,7 +62,7 @@ def test_retriever_filters_below_threshold():
 
 
 def test_retriever_respects_top_k():
-    cfg = Config(top_k=2, score_threshold=0.0)
+    cfg = Config(retrieval_mode="dense", top_k=2, score_threshold=0.0)
     store = VectorStore(dim=3)
     from papermind.chunker import Chunk
     chunks = [Chunk(text=f"t{i}", source="a.pdf", seq=i) for i in range(5)]

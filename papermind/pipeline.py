@@ -60,6 +60,7 @@ class RAGPipeline:
             self.retriever.store = self.store
         else:
             self.store.add(all_chunks, vectors)
+        self.retriever.rebuild_bm25()  # 稀疏索引与库内容同步
 
         self.store.save(self.index_dir)
         elapsed = round(time.time() - t0, 2)

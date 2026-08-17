@@ -19,6 +19,18 @@ COOKING_TEXT = (
 ) * 8
 
 
+@pytest.fixture(autouse=True)
+def force_offline(monkeypatch):
+    """强制嵌入三级降级落地到 hash：patch 掉 API 与本地模型两条路径。
+
+    不依赖"环境里恰好没装 fastembed/没缓存模型"——本机与 CI 行为一致。
+    """
+    def _raise(*args, **kwargs):
+        raise RuntimeError("forced offline for test")
+    monkeypatch.setattr("papermind.embeddings.Embedder._embed_api", _raise)
+    monkeypatch.setattr("papermind.embeddings.Embedder._embed_local", _raise)
+
+
 @pytest.fixture()
 def offline_config(tmp_path):
     """临时目录 + 禁用外部依赖的配置。"""
@@ -30,10 +42,7 @@ def offline_config(tmp_path):
 
 
 def make_pipeline(cfg):
-    pipe = RAGPipeline(cfg)
-    pipe.embedder._api_failed = True   # 强制跳过 API
-    pipe.embedder._local_failed = True  # 强制跳过本地模型（CI 无需下载）
-    return pipe
+    return RAGPipeline(cfg)
 
 
 def _write(doc_dir, name, text):

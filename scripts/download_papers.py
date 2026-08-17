@@ -23,7 +23,7 @@ OUT_DIR = os.path.join(ROOT, "data", "docs")
 
 PAPERS = [
     ("PatchCore_2022_Towards_Total_Recall.pdf", "2106.08265"),
-    ("SPADE_2021_SubImage_Anomaly_Detection.pdf", "2008.08100"),
+    ("SPADE_2021_SubImage_Anomaly_Detection.pdf", "2005.02357"),
     ("PaDiM_2021_Patch_Distribution_Modeling.pdf", "2011.08785"),
     ("CutPaste_2021_SelfSupervised_Anomaly_Detection.pdf", "2104.04015"),
     ("DRAEM_2021_Discriminatively_Trained_Reconstruction.pdf", "2108.07610"),

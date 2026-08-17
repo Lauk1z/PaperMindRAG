@@ -37,6 +37,18 @@ class VectorStore:
                 out.append(c["source"])
         return out
 
+    @property
+    def texts(self) -> List[str]:
+        """全部块文本（BM25 重建索引用，与矩阵行一一对应）。"""
+        return [c["text"] for c in self._chunks]
+
+    def chunk_at(self, idx: int) -> dict:
+        return self._chunks[idx]
+
+    def index_of(self, chunk: dict) -> int:
+        """块元数据 -> 库内行号。检索结果携带行号成本高，按需反查。"""
+        return self._chunks.index(chunk)
+
     # ---------------- 写入 ----------------
     def add(self, chunks: List[Chunk], vectors: List[List[float]]):
         assert len(chunks) == len(vectors)
