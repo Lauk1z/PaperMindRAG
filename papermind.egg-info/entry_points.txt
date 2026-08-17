@@ -1,0 +1,2 @@
+[console_scripts]
+papermind = papermind.cli:main

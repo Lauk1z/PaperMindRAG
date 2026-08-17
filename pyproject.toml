@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "papermind"
+version = "1.1.0"
+description = "CV 异常检测论文 RAG 问答系统 + 每日 arXiv 中文日报"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "flask>=3.0",
+    "numpy>=1.26",
+    "requests>=2.31",
+    "pypdf>=4.0",
+]
+
+[project.optional-dependencies]
+embed = ["fastembed>=0.3", "onnxruntime>=1.17"]  # 本地语义嵌入（可选）
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.scripts]
+papermind = "papermind.cli:main"
+
+[tool.setuptools]
+packages = ["papermind"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]  # pycodestyle + pyflakes，保持宽松避免噪音
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

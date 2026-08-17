@@ -1,0 +1,4 @@
+# 开发依赖：测试 + lint
+-r requirements.txt
+pytest>=8.0
+ruff>=0.4

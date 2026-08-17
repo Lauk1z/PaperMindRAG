@@ -1,0 +1,5 @@
+# 本地语义嵌入（可选：fastembed + ONNX Runtime，约 100MB）
+# pip install -r requirements-embed.txt
+-r requirements.txt
+fastembed>=0.3
+onnxruntime>=1.17

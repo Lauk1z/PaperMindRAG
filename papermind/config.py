@@ -3,8 +3,17 @@
 所有可调参数集中于此；敏感信息（API Key）从环境变量 / .env 读取，
 避免硬编码进代码仓库。
 """
+import logging
 import os
 from dataclasses import dataclass
+
+
+def setup_logging(level: str = None):
+    """统一日志格式；库内只 getLogger，入口处调用一次。"""
+    logging.basicConfig(
+        level=(level or os.environ.get("PM_LOG_LEVEL", "INFO")).upper(),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S")
 
 
 def _load_dotenv():
@@ -63,3 +72,17 @@ class Config:
     # ---------- 路径（相对项目根目录） ----------
     data_dir: str = os.environ.get("PM_DATA_DIR", "data/docs")
     index_dir: str = os.environ.get("PM_INDEX_DIR", "data/index")
+
+    def __post_init__(self):
+        """启动即校验关键参数，配置错误立刻暴露而不是运行到一半才炸。"""
+        errors = []
+        if self.chunk_size <= 0:
+            errors.append("chunk_size 必须为正")
+        if not 0 <= self.chunk_overlap < self.chunk_size:
+            errors.append("chunk_overlap 须满足 0 <= overlap < chunk_size")
+        if self.top_k <= 0:
+            errors.append("top_k 必须为正")
+        if not 0.0 <= self.score_threshold < 1.0:
+            errors.append("score_threshold 须在 [0, 1)")
+        if errors:
+            raise ValueError("配置校验失败: " + "; ".join(errors))

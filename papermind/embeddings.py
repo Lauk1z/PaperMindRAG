@@ -8,10 +8,13 @@
    保证无网络、无依赖时系统仍可运行——但只有词面重叠没有语义）
 """
 import hashlib
+import logging
 import re
 from typing import List
 
 from .config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class Embedder:
@@ -35,7 +38,7 @@ class Embedder:
                 return vecs
             except Exception as e:
                 self._api_failed = True
-                print(f"[嵌入] API不可用({e})，切换本地语义嵌入模型")
+                logger.warning("嵌入API不可用(%s)，切换本地语义嵌入模型", e)
         # 第二级：本地语义嵌入（fastembed）
         if not self._local_failed:
             try:
@@ -44,7 +47,7 @@ class Embedder:
                 return vecs
             except Exception as e:
                 self._local_failed = True
-                print(f"[嵌入] 本地模型不可用({e})，降级为哈希嵌入")
+                logger.warning("本地模型不可用(%s)，降级为哈希嵌入", e)
         # 第三级：哈希兜底
         self.mode = "hash"
         return [self._hash_embed(t) for t in texts]
@@ -70,8 +73,8 @@ class Embedder:
         """fastembed：基于 ONNX Runtime 的轻量推理，无 torch 依赖。"""
         if self._local_model is None:
             from fastembed import TextEmbedding
-            print(f"[嵌入] 加载本地语义模型: {self.config.local_embed_model}"
-                  "（首次运行需下载权重）")
+            logger.info("加载本地语义模型: %s（首次运行需下载权重）",
+                        self.config.local_embed_model)
             self._local_model = TextEmbedding(
                 model_name=self.config.local_embed_model)
         vectors = list(self._local_model.embed(texts))

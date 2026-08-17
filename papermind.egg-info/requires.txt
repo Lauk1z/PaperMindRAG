@@ -1,0 +1,12 @@
+flask>=3.0
+numpy>=1.26
+requests>=2.31
+pypdf>=4.0
+
+[dev]
+pytest>=8.0
+ruff>=0.4
+
+[embed]
+fastembed>=0.3
+onnxruntime>=1.17

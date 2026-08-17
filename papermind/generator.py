@@ -5,7 +5,6 @@
 2. 片段带编号，要求回答中用 [1][2] 标注引用；
 3. 检索为空或片段不含答案时，明确说"文献中未提及"，禁止自由发挥。
 """
-import json
 from typing import List
 
 from .config import Config

@@ -1,3 +1,20 @@
+Metadata-Version: 2.4
+Name: papermind
+Version: 1.1.0
+Summary: CV 异常检测论文 RAG 问答系统 + 每日 arXiv 中文日报
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: flask>=3.0
+Requires-Dist: numpy>=1.26
+Requires-Dist: requests>=2.31
+Requires-Dist: pypdf>=4.0
+Provides-Extra: embed
+Requires-Dist: fastembed>=0.3; extra == "embed"
+Requires-Dist: onnxruntime>=1.17; extra == "embed"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+
 # PaperMind · CV 异常检测论文 RAG 问答系统
 
 [![Daily Digest](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/daily.yml/badge.svg)](https://github.com/zanezhao0708/PaperMindRAG/actions/workflows/daily.yml)
@@ -44,38 +61,15 @@ python scripts/download_papers.py
 python app.py            # 打开 http://127.0.0.1:5000
 ```
 
-CLI（`pip install -e .` 后可用）：
+命令行直接问答：
 
 ```bash
-papermind ingest data/docs/      # 摄入文档（增量：同名替换旧块）
-papermind query "PatchCore 的核心思想"   # 命令行问答
-papermind serve --port 5000      # 启动 Web 服务
+python -c "
+from papermind.pipeline import RAGPipeline
+pipe = RAGPipeline()
+r = pipe.query('PatchCore 如何用 memory bank 做异常检测?')
+print(r['answer']); print(r['sources'])"
 ```
-
-测试与检查：
-
-```bash
-make dev        # 安装开发依赖
-make test       # 31 个用例，全离线 0.4s 跑完（不下载模型/不联网）
-make lint       # ruff 代码检查
-```
-
-Docker 部署：
-
-```bash
-make docker-build && make docker-run   # gunicorn 生产级 WSGI
-```
-
-## 工程化实践
-
-- **测试**：`tests/` 31 个用例覆盖分块/向量库/嵌入降级/检索阈值/端到端/HTTP 契约，**全离线可跑**（stub 掉外部依赖），CI 4 分钟内完成
-- **CI**：[ci.yml](.github/workflows/ci.yml) push/PR 自动 lint + pytest（Python 3.10-3.12 矩阵），[daily.yml](.github/workflows/daily.yml) 每日日报
-- **增量摄入**：按 source 替换旧块（`VectorStore.remove_source`），重复上传不膨胀
-- **应用工厂**：`create_app()` + 懒加载 Pipeline + `/api/health` 存活探针 + 统一 JSON 错误处理（400/404/413/500）
-- **配置 fail-fast**：`Config.__post_init__` 启动即校验参数合法性
-- **日志**：库内 `logging.getLogger`，入口统一 `setup_logging()`，级别可用 `PM_LOG_LEVEL` 调
-- **打包**：pyproject.toml + console_scripts 入口，可 `pip install` 分发
-- **依赖分层**：核心（flask/numpy/pypdf）→ embed（fastembed/onnxruntime，可选）→ dev（pytest/ruff）
 
 ## 配置（.env，已 gitignore）
 
@@ -85,31 +79,24 @@ PM_BASE_URL=https://api.deepseek.com/v1
 PM_CHAT_MODEL=deepseek-chat
 PM_LOCAL_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 HF_ENDPOINT=https://hf-mirror.com   # 模型权重国内镜像
-HF_HUB_DISABLE_XET=1               # 镜像站不支持 xet 协议时禁用
-PM_LOG_LEVEL=INFO                  # 日志级别
 ```
 
 ## 目录结构
 
 ```
 papermind/
-├── papermind/          # 核心包（可 pip install）
-│   ├── config.py       # 集中配置 + .env 加载 + 参数校验
+├── papermind/          # 核心包
+│   ├── config.py       # 集中配置 + .env 加载
 │   ├── loader.py       # PDF/TXT/MD 加载
 │   ├── chunker.py      # 递归字符分块（可重叠）
 │   ├── embeddings.py   # 三级降级嵌入
-│   ├── vectorstore.py  # NumPy 向量库（余弦检索+持久化+按源删除）
+│   ├── vectorstore.py  # NumPy 向量库（余弦检索+持久化）
 │   ├── retriever.py    # top-k 召回 + 阈值过滤
 │   ├── generator.py    # LLM 生成（引用约束/抽取式兜底）
-│   ├── pipeline.py     # RAG 编排（增量摄入）
-│   ├── server.py       # Flask 应用工厂
-│   └── cli.py          # papermind 命令行
-├── tests/              # pytest 测试套件（离线）
-├── scripts/            # 论文下载 / 每日日报
+│   └── pipeline.py     # RAG 编排
 ├── templates/index.html# Web UI
-├── app.py              # 兼容旧启动方式
-├── Dockerfile / Makefile / pyproject.toml
-└── .github/workflows/  # CI（lint+test）+ 每日日报
+├── scripts/download_papers.py
+└── app.py              # Flask 服务
 ```
 
 ## 设计取舍（面试可讲）
@@ -121,10 +108,9 @@ papermind/
 | 分块 800 字符 + 120 重叠 | 论文段落级语义完整；重叠避免关键句被截断 |
 | 提示词强制引用编号 | 回答可溯源到具体 chunk，可核验、可评估 |
 | 多语言 MiniLM 本地嵌入 | 中文提问英文论文；ONNX 推理免 torch，部署轻 |
-| 测试全离线 stub 外部依赖 | CI 不下模型不联网，0.4s 跑完，降级路径本身也被测试覆盖 |
 
 ## 局限与改进方向
 
 - 检索为纯稠密向量，可加 BM25 混合检索（Hybrid Search）提升召回
 - 图表内容无法解析（PDF 只抽文本），可引入多模态文档解析
-- 嵌入无缓存，可按 chunk 哈希做增量嵌入复用
+- 全量重建索引，可改增量摄入 + 按 source 去重更新

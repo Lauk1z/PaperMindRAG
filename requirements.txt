@@ -1,6 +1,5 @@
+# 核心依赖（轻量：Web服务+RAG主链路）
 flask>=3.0
 numpy>=1.26
 requests>=2.31
 pypdf>=4.0
-fastembed>=0.3
-onnxruntime>=1.17

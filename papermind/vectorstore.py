@@ -46,6 +46,15 @@ class VectorStore:
         self._chunks.extend(
             {"text": c.text, "source": c.source, "seq": c.seq} for c in chunks)
 
+    def remove_source(self, source: str) -> int:
+        """删除某文档的全部块（增量更新时替换旧版本），返回删除数。"""
+        keep = np.array([c["source"] != source for c in self._chunks])
+        removed = int((~keep).sum())
+        if removed:
+            self._matrix = self._matrix[keep]
+            self._chunks = [c for c, k in zip(self._chunks, keep) if k]
+        return removed
+
     # ---------------- 检索 ----------------
     def search(self, query_vec: List[float],
                top_k: int = 5) -> List[Tuple[dict, float]]:

@@ -1,7 +1,10 @@
 """文档加载模块：把 PDF / TXT / Markdown 读成统一的 Document 结构。"""
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,9 +48,9 @@ class Loader:
                 continue
             try:
                 docs.append(self.load(path))
-                print(f"[加载] {name} OK")
+                logger.info("加载 %s OK", name)
             except Exception as e:
-                print(f"[加载] {name} 失败: {e}")
+                logger.warning("加载 %s 失败: %s", name, e)
         return docs
 
     @staticmethod
