@@ -12,13 +12,15 @@
 from dataclasses import replace
 import logging
 import os
+import sqlite3
 import time
 from urllib.parse import urlparse
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .auth import can_manage_config, init_auth, valid_csrf
+from .auth import (can_manage_config, init_auth, load_user_api_config,
+                   save_user_api_config, valid_csrf)
 from .config import Config
 from .pipeline import RAGPipeline
 
@@ -91,23 +93,43 @@ def create_app(config: Config = None, upload_dir: str = None,
     app.config["PM_CONFIG"] = config
     app.config["PM_ENV_PATH"] = env_path or ENV_PATH
     app.extensions["rag_pipeline"] = None  # 懒加载：首请求才初始化
+    app.extensions["rag_pipelines"] = {}
+    app.extensions["pm_user_configs"] = {}
     app.extensions["pm_boot"] = time.time()
     if auth_required is None:
         auth_required = os.environ.get("PM_AUTH_REQUIRED", "1") != "0"
     init_auth(app, auth_db_path or AUTH_DB_PATH, auth_required)
 
+    def current_user_key():
+        return g.user["id"] if g.user else 0
+
     def get_current_config() -> Config:
-        if app.extensions["rag_pipeline"] is not None:
-            return app.extensions["rag_pipeline"].config
-        if app.config["PM_CONFIG"] is None:
-            app.config["PM_CONFIG"] = Config()
-        return app.config["PM_CONFIG"]
+        user_key = current_user_key()
+        cached = app.extensions["pm_user_configs"].get(user_key)
+        if cached is not None:
+            return cached
+
+        base = app.config["PM_CONFIG"] or Config()
+        if user_key:
+            values = load_user_api_config(
+                user_key,
+                {field: getattr(base, field) for field in API_ENV_KEYS} | {
+                    "api_key": base.api_key,
+                    "embed_api_key": base.embed_api_key,
+                },
+            )
+            base = replace(base, **values)
+        app.extensions["pm_user_configs"][user_key] = base
+        return base
 
     def get_pipeline() -> RAGPipeline:
-        if app.extensions["rag_pipeline"] is None:
+        user_key = current_user_key()
+        if user_key not in app.extensions["rag_pipelines"]:
             logger.info("初始化 RAG Pipeline（首请求触发）")
-            app.extensions["rag_pipeline"] = RAGPipeline(get_current_config())
-        return app.extensions["rag_pipeline"]
+            pipeline = RAGPipeline(get_current_config())
+            app.extensions["rag_pipelines"][user_key] = pipeline
+            app.extensions["rag_pipeline"] = pipeline
+        return app.extensions["rag_pipelines"][user_key]
 
     # ---------------- 页面 ----------------
     @app.route("/")
@@ -232,13 +254,24 @@ def create_app(config: Config = None, upload_dir: str = None,
 
         updated = replace(current, api_key=api_key, embed_api_key=embed_api_key,
                           **values)
+        user_key = current_user_key()
         try:
-            _update_env_file(app.config["PM_ENV_PATH"], env_updates)
-        except OSError:
+            if user_key:
+                save_user_api_config(
+                    user_key,
+                    {field: getattr(updated, field) for field in API_ENV_KEYS} | {
+                        "api_key": updated.api_key,
+                        "embed_api_key": updated.embed_api_key,
+                    },
+                )
+            else:
+                _update_env_file(app.config["PM_ENV_PATH"], env_updates)
+        except (OSError, sqlite3.Error):
             logger.exception("API 配置写入失败")
-            return jsonify({"ok": False, "error": "配置文件写入失败"}), 500
+            return jsonify({"ok": False, "error": "配置写入失败"}), 500
 
-        app.config["PM_CONFIG"] = updated
+        app.extensions["pm_user_configs"][user_key] = updated
+        app.extensions["rag_pipelines"].pop(user_key, None)
         app.extensions["rag_pipeline"] = None
         return jsonify({
             "ok": True,

@@ -14,6 +14,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 auth_bp = Blueprint("auth", __name__)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+API_CONFIG_FIELDS = (
+    "api_key",
+    "base_url",
+    "chat_model",
+    "embed_api_key",
+    "embed_base_url",
+    "embed_api_model",
+)
 
 
 def _connect():
@@ -65,6 +73,99 @@ def _is_loopback(remote_addr):
     return addr.is_loopback or bool(
         addr.version == 6 and addr.ipv4_mapped and addr.ipv4_mapped.is_loopback
     )
+
+
+def _account_switcher_enabled():
+    return (
+        os.environ.get("PM_ACCOUNT_SWITCHER") == "1"
+        and _is_loopback(request.remote_addr)
+    )
+
+
+def _local_accounts():
+    if not _account_switcher_enabled():
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT id, email, display_name, avatar_url, password_hash IS NOT NULL AS has_password
+               FROM users ORDER BY id"""
+        ).fetchall()
+    return [
+        {
+            **_user_dict(row),
+            "has_password": bool(row["has_password"]),
+        }
+        for row in rows
+    ]
+
+
+def load_user_api_config(user_id, defaults):
+    """Load a user's local API config, migrating the legacy config once."""
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT api_key, base_url, chat_model, embed_api_key,
+                      embed_base_url, embed_api_model
+               FROM user_api_configs WHERE user_id = ?""",
+            (user_id,),
+        ).fetchone()
+        if row:
+            return {field: row[field] for field in API_CONFIG_FIELDS}
+
+        first_user = conn.execute("SELECT MIN(id) AS id FROM users").fetchone()
+        values = {
+            field: str(defaults.get(field) or "")
+            for field in API_CONFIG_FIELDS
+        }
+        if not first_user or user_id != first_user["id"]:
+            values["api_key"] = ""
+            values["embed_api_key"] = ""
+        conn.execute(
+            """INSERT INTO user_api_configs
+               (user_id, api_key, base_url, chat_model, embed_api_key,
+                embed_base_url, embed_api_model)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, *(values[field] for field in API_CONFIG_FIELDS)),
+        )
+    return values
+
+
+def save_user_api_config(user_id, values):
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO user_api_configs
+               (user_id, api_key, base_url, chat_model, embed_api_key,
+                embed_base_url, embed_api_model, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 api_key = excluded.api_key,
+                 base_url = excluded.base_url,
+                 chat_model = excluded.chat_model,
+                 embed_api_key = excluded.embed_api_key,
+                 embed_base_url = excluded.embed_base_url,
+                 embed_api_model = excluded.embed_api_model,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (user_id, *(str(values.get(field) or "") for field in API_CONFIG_FIELDS)),
+        )
+
+
+def _load_user_preferences(user_id):
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT theme FROM user_preferences WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    return {"theme": row["theme"] if row else ""}
+
+
+def _save_user_preferences(user_id, theme):
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO user_preferences (user_id, theme, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 theme = excluded.theme,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (user_id, theme),
+        )
 
 
 def can_manage_config():
@@ -160,11 +261,19 @@ def _oauth_user(provider, profile):
 def login_page():
     if g.user and current_app.config["PM_AUTH_REQUIRED"]:
         return redirect(url_for("index"))
+    accounts = _local_accounts()
+    selected_id = request.args.get("account", type=int)
+    selected_account = next(
+        (account for account in accounts if account["id"] == selected_id), None
+    )
     return render_template(
         "login.html",
         csrf_token=ensure_csrf_token(),
         providers=_provider_status(),
         oauth_error=request.args.get("error", ""),
+        local_accounts=accounts,
+        selected_account=selected_account,
+        initial_mode="register" if request.args.get("mode") == "register" else "login",
     )
 
 
@@ -229,12 +338,30 @@ def logout():
 def me():
     if not g.user:
         return jsonify({"ok": False, "error": "尚未登录"}), 401
-    return jsonify({
+    body = {
         "ok": True,
         "user": g.user,
         "csrf_token": ensure_csrf_token(),
         "can_configure": can_manage_config(),
-    })
+        "preferences": _load_user_preferences(g.user["id"]),
+    }
+    if _account_switcher_enabled():
+        body["accounts"] = _local_accounts()
+    return jsonify(body)
+
+
+@auth_bp.route("/auth/preferences", methods=["PUT"])
+def preferences():
+    if not g.user:
+        return jsonify({"ok": False, "error": "请先登录"}), 401
+    if not valid_csrf():
+        return jsonify({"ok": False, "error": "页面已过期，请刷新后重试"}), 403
+    data = request.get_json(silent=True) or {}
+    theme = str(data.get("theme") or "")
+    if theme not in ("light", "dark"):
+        return jsonify({"ok": False, "error": "主题设置无效"}), 400
+    _save_user_preferences(g.user["id"], theme)
+    return jsonify({"ok": True, "preferences": {"theme": theme}})
 
 
 @auth_bp.route("/auth/oauth/<provider>")
@@ -308,6 +435,21 @@ def _init_db(path):
                 provider_user_id TEXT NOT NULL,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 PRIMARY KEY (provider, provider_user_id)
+            );
+            CREATE TABLE IF NOT EXISTS user_api_configs (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                api_key TEXT NOT NULL DEFAULT '',
+                base_url TEXT NOT NULL DEFAULT '',
+                chat_model TEXT NOT NULL DEFAULT '',
+                embed_api_key TEXT NOT NULL DEFAULT '',
+                embed_base_url TEXT NOT NULL DEFAULT '',
+                embed_api_model TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                theme TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             """
         )

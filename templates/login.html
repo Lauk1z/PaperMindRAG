@@ -104,6 +104,51 @@
   .heading h1 { margin: 0; font-size: 22px; letter-spacing: -.45px; }
   .heading p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
 
+  .local-accounts { margin-bottom: 18px; }
+  .local-accounts-label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+  .local-account-list { max-height: 190px; display: grid; gap: 7px; overflow: auto; }
+  .local-account {
+    width: 100%;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--panel-soft);
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+  }
+  .local-account:hover, .local-account.selected { border-color: var(--brand); }
+  .local-account-avatar {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    border-radius: 8px;
+    background: var(--brand);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .local-account-copy { min-width: 0; display: grid; gap: 2px; }
+  .local-account-copy strong, .local-account-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .local-account-copy strong { font-size: 11.5px; }
+  .local-account-copy span { color: var(--muted); font-size: 10px; }
+
   .tabs {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -249,6 +294,24 @@
       <h1 id="authTitle">欢迎回来</h1>
       <p id="authSubtitle">登录后继续使用你的论文知识工作台</p>
     </div>
+    {% if local_accounts %}
+    <div class="local-accounts" data-testid="local-account-switcher">
+      <span class="local-accounts-label">选择本机用户</span>
+      <div class="local-account-list">
+        {% for account in local_accounts %}
+        <button class="local-account{% if selected_account and selected_account.id == account.id %} selected{% endif %}"
+                type="button" data-account-email="{{ account.email }}"
+                data-account-password="{{ 'true' if account.has_password else 'false' }}">
+          <span class="local-account-avatar" aria-hidden="true">{{ (account.display_name or account.email)[0]|upper }}</span>
+          <span class="local-account-copy">
+            <strong>{{ account.display_name or account.email }}</strong>
+            <span>{{ account.email }}</span>
+          </span>
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
     <div class="tabs" role="tablist" aria-label="账户操作">
       <button class="tab active" type="button" role="tab" aria-selected="true" data-mode="login">登录</button>
       <button class="tab" type="button" role="tab" aria-selected="false" data-mode="register">注册</button>
@@ -257,7 +320,8 @@
     <form class="form" id="loginForm">
       <div class="field">
         <label for="loginEmail">邮箱</label>
-        <input id="loginEmail" name="email" type="email" autocomplete="email" required>
+        <input id="loginEmail" name="email" type="email" autocomplete="email"
+               value="{{ selected_account.email if selected_account else '' }}" required>
       </div>
       <div class="field">
         <label for="loginPassword">密码</label>
@@ -305,7 +369,7 @@
       </a>
     </div>
     <p class="message" id="formMessage" role="alert">{{ oauth_error }}</p>
-    <p class="footnote">邮箱账户保存在本机数据库中；OAuth 密钥只从服务器环境变量读取。</p>
+    <p class="footnote">账户、API 配置和界面偏好按用户保存在本机；切换账户需要重新验证。</p>
   </section>
 </main>
 <script>
@@ -326,10 +390,10 @@
     applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
   });
 
-  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
-    const register = tab.dataset.mode === 'register';
+  function setMode(mode) {
+    const register = mode === 'register';
     document.querySelectorAll('.tab').forEach(item => {
-      const active = item === tab;
+      const active = item.dataset.mode === mode;
       item.classList.toggle('active', active);
       item.setAttribute('aria-selected', String(active));
     });
@@ -338,7 +402,26 @@
     title.textContent = register ? '创建账户' : '欢迎回来';
     subtitle.textContent = register ? '使用邮箱注册 PaperMind 本地账户' : '登录后继续使用你的论文知识工作台';
     message.textContent = '';
+  }
+
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+    setMode(tab.dataset.mode);
   }));
+  document.querySelectorAll('.local-account').forEach(account => {
+    account.addEventListener('click', () => {
+      setMode('login');
+      document.getElementById('loginEmail').value = account.dataset.accountEmail;
+      document.querySelectorAll('.local-account').forEach(item => {
+        item.classList.toggle('selected', item === account);
+      });
+      if (account.dataset.accountPassword === 'true') {
+        document.getElementById('loginPassword').focus();
+      } else {
+        message.textContent = '该账户使用第三方登录，请选择下方对应的快捷登录方式。';
+      }
+    });
+  });
+  setMode({{ initial_mode|tojson }});
 
   async function submitAuth(endpoint, payload, button) {
     button.disabled = true;

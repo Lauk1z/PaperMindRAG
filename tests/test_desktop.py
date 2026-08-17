@@ -15,6 +15,7 @@ def test_configure_desktop_environment_uses_persistent_paths(tmp_path, monkeypat
         "PM_ENV_PATH",
         "PM_COOKIE_SECURE",
         "PM_AUTH_REQUIRED",
+        "PM_ACCOUNT_SWITCHER",
         "XDG_CACHE_HOME",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -30,6 +31,7 @@ def test_configure_desktop_environment_uses_persistent_paths(tmp_path, monkeypat
     assert os.environ["PM_ENV_PATH"] == str(paths.env_file)
     assert os.environ["PM_COOKIE_SECURE"] == "0"
     assert os.environ["PM_AUTH_REQUIRED"] == "1"
+    assert os.environ["PM_ACCOUNT_SWITCHER"] == "1"
 
 
 def test_local_server_uses_loopback_and_stops():

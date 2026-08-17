@@ -237,7 +237,53 @@
   }
   .account-exit { color: #8b949e; font-size: 10px; }
   .login-link { color: #c9d1d9; text-decoration: none; }
-  .account-slot { display: flex; align-items: center; }
+  .account-slot { position: relative; display: flex; align-items: center; }
+  .account-menu {
+    position: absolute;
+    top: 44px;
+    right: 0;
+    z-index: 30;
+    width: 250px;
+    padding: 8px;
+    border: 1px solid #30363d;
+    border-radius: 11px;
+    background: #161b22;
+    box-shadow: 0 16px 38px rgba(1, 4, 9, .48);
+  }
+  .account-menu[hidden] { display: none; }
+  .account-menu-label {
+    padding: 7px 9px;
+    color: #8b949e;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .6px;
+    text-transform: uppercase;
+  }
+  .account-menu-user, .account-menu-action {
+    width: 100%;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #c9d1d9;
+    text-align: left;
+    cursor: pointer;
+  }
+  .account-menu-user:hover, .account-menu-action:hover { background: #21262d; }
+  .account-menu-user.current { color: #f0f6fc; cursor: default; }
+  .account-menu-copy { min-width: 0; display: grid; gap: 2px; }
+  .account-menu-copy strong, .account-menu-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .account-menu-copy strong { font-size: 11.5px; }
+  .account-menu-copy span { color: #8b949e; font-size: 10px; }
+  .account-menu-separator { height: 1px; margin: 6px 0; background: #30363d; }
 
   .direct-file-notice {
     position: fixed;
@@ -1249,6 +1295,7 @@ const initialTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: da
   ? 'dark' : 'light');
 const state = { queue: [], asking: false, uploading: false, maxUploadMb: 64 };
 let authCsrfToken = '';
+let currentUserId = 0;
 const allowedExtensions = new Set(['pdf', 'txt', 'md']);
 let toastTimer;
 
@@ -1258,7 +1305,10 @@ function applyTheme(theme, persist = true) {
   get('themeToggle').textContent = isDark ? '☀' : '☾';
   get('themeToggle').setAttribute('aria-label', isDark ? '切换浅色模式' : '切换深色模式');
   document.querySelector('meta[name="theme-color"]').content = '#010409';
-  if (persist) localStorage.setItem('pm-theme', isDark ? 'dark' : 'light');
+  if (persist) {
+    const key = currentUserId ? `pm-theme:${currentUserId}` : 'pm-theme';
+    localStorage.setItem(key, isDark ? 'dark' : 'light');
+  }
 }
 
 applyTheme(initialTheme, Boolean(savedTheme));
@@ -1708,6 +1758,16 @@ get('clearChat').addEventListener('click', clearChat);
 get('themeToggle').addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(next);
+  if (authCsrfToken) {
+    fetch('/auth/preferences', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': authCsrfToken
+      },
+      body: JSON.stringify({ theme: next })
+    }).catch(() => {});
+  }
 });
 get('settingsOpen').addEventListener('click', openSettings);
 get('settingsClose').addEventListener('click', closeSettings);
@@ -1718,6 +1778,11 @@ get('settingsOverlay').addEventListener('click', event => {
 });
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !get('settingsOverlay').hidden) closeSettings();
+  const accountMenu = get('accountMenu');
+  if (event.key === 'Escape' && accountMenu && !accountMenu.hidden) {
+    accountMenu.hidden = true;
+    get('accountMenuButton').setAttribute('aria-expanded', 'false');
+  }
 });
 document.querySelectorAll('.secret-toggle').forEach(button => button.addEventListener('click', () => {
   const input = get(button.dataset.secret);
@@ -1738,38 +1803,93 @@ get('refreshAll').addEventListener('click', async () => {
   await refreshStats();
   showToast('状态已刷新');
 });
-async function logout() {
+async function logout(target = '/login') {
   try {
     const response = await fetch('/auth/logout', {
       method: 'POST',
       headers: { 'X-CSRF-Token': authCsrfToken }
     });
     if (!response.ok) throw new Error('退出失败');
-    window.location.assign('/login');
+    window.location.assign(target);
   } catch (_) {
     showToast('退出失败，请刷新后重试', 'error');
   }
 }
 
-function renderAccount(user) {
-  const button = document.createElement('button');
+function accountAvatar(user) {
   const avatar = document.createElement('span');
-  const name = document.createElement('span');
-  const exit = document.createElement('span');
-  button.className = 'account-button';
-  button.id = 'logoutButton';
-  button.type = 'button';
-  button.title = `${user.email} · 点击退出`;
   avatar.className = 'account-avatar';
   avatar.setAttribute('aria-hidden', 'true');
   avatar.textContent = Array.from(user.display_name || user.email || '?')[0].toUpperCase();
+  return avatar;
+}
+
+function accountMenuUser(user, current = false) {
+  const button = document.createElement('button');
+  const copy = document.createElement('span');
+  const name = document.createElement('strong');
+  const email = document.createElement('span');
+  button.className = `account-menu-user${current ? ' current' : ''}`;
+  button.type = 'button';
+  button.append(accountAvatar(user), copy);
+  copy.className = 'account-menu-copy';
+  name.textContent = user.display_name || user.email;
+  email.textContent = user.email;
+  copy.append(name, email);
+  if (!current) button.addEventListener('click', () => logout(`/login?account=${user.id}`));
+  return button;
+}
+
+function accountMenuAction(label, target) {
+  const button = document.createElement('button');
+  button.className = 'account-menu-action';
+  button.type = 'button';
+  button.textContent = label;
+  button.addEventListener('click', () => logout(target));
+  return button;
+}
+
+function renderAccount(user, accounts) {
+  const button = document.createElement('button');
+  const name = document.createElement('span');
+  const exit = document.createElement('span');
+  button.className = 'account-button';
+  button.id = 'accountMenuButton';
+  button.type = 'button';
+  button.title = `${user.email} · 账户菜单`;
+  button.setAttribute('aria-expanded', 'false');
   name.className = 'account-name';
   name.textContent = user.display_name || user.email;
   exit.className = 'account-exit';
-  exit.textContent = '退出';
-  button.append(avatar, name, exit);
-  button.addEventListener('click', logout);
-  get('accountSlot').replaceChildren(button);
+  exit.textContent = Array.isArray(accounts) ? '▾' : '退出';
+  button.append(accountAvatar(user), name, exit);
+
+  if (!Array.isArray(accounts)) {
+    button.addEventListener('click', () => logout());
+    get('accountSlot').replaceChildren(button);
+    return;
+  }
+
+  const menu = document.createElement('div');
+  const label = document.createElement('div');
+  const separator = document.createElement('div');
+  menu.className = 'account-menu';
+  menu.id = 'accountMenu';
+  menu.hidden = true;
+  label.className = 'account-menu-label';
+  label.textContent = '本机用户';
+  separator.className = 'account-menu-separator';
+  menu.append(label, accountMenuUser(user, true));
+  accounts.filter(account => account.id !== user.id)
+    .forEach(account => menu.append(accountMenuUser(account)));
+  menu.append(separator, accountMenuAction('添加或注册其他用户', '/login?mode=register'));
+  menu.append(accountMenuAction('退出登录', '/login'));
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    menu.hidden = !menu.hidden;
+    button.setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  get('accountSlot').replaceChildren(button, menu);
 }
 
 async function loadAccount() {
@@ -1778,12 +1898,24 @@ async function loadAccount() {
     if (!response.ok) return;
     const body = await response.json();
     authCsrfToken = body.csrf_token || '';
+    currentUserId = body.user.id || 0;
+    const userTheme = body.preferences?.theme
+      || localStorage.getItem(`pm-theme:${currentUserId}`);
+    if (userTheme) applyTheme(userTheme, false);
     get('settingsOpen').hidden = !body.can_configure;
-    renderAccount(body.user);
+    renderAccount(body.user, body.accounts);
   } catch (_) {
     // 服务状态由健康检查统一提示。
   }
 }
+
+document.addEventListener('click', event => {
+  const menu = get('accountMenu');
+  if (menu && !menu.hidden && !get('accountSlot').contains(event.target)) {
+    menu.hidden = true;
+    get('accountMenuButton').setAttribute('aria-expanded', 'false');
+  }
+});
 
 async function initialize() {
   if (window.location.protocol === 'file:') {

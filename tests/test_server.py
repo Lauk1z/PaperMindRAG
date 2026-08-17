@@ -230,16 +230,28 @@ def test_config_saves_without_returning_secrets(client):
     assert r.get_json()["api_key_configured"] is True
 
     saved = open(env_path, encoding="utf-8").read()
-    assert "# keep this setting\nPM_LOG_LEVEL=DEBUG\n" in saved
-    assert "PM_API_KEY=chat-secret-value" in saved
-    assert "PM_EMBED_API_KEY=embed-secret-value" in saved
+    assert saved == "# keep this setting\nPM_LOG_LEVEL=DEBUG"
+
+    user_id = client.get("/auth/me").get_json()["user"]["id"]
+    db_path = client.application.config["PM_AUTH_DB_PATH"]
+    with sqlite3.connect(db_path) as conn:
+        stored = conn.execute(
+            """SELECT api_key, chat_model, embed_api_key, embed_api_model
+               FROM user_api_configs WHERE user_id = ?""",
+            (user_id,),
+        ).fetchone()
+    assert stored == (
+        "chat-secret-value", "example-chat", "embed-secret-value", "example-embed"
+    )
 
     body = client.get("/api/config").get_json()
     assert body["base_url"] == "https://llm.example.test/v1"
     assert body["chat_model"] == "example-chat"
     assert "chat-secret-value" not in str(body)
     assert "embed-secret-value" not in str(body)
-    assert client.application.config["PM_CONFIG"].api_key == "chat-secret-value"
+    assert client.application.extensions["pm_user_configs"][user_id].api_key == (
+        "chat-secret-value"
+    )
     assert client.application.extensions["rag_pipeline"] is None
 
 
@@ -254,8 +266,159 @@ def test_config_validates_url_and_can_clear_key(client):
     r = client.put("/api/config", json={"clear_api_key": True}, headers=headers)
     assert r.status_code == 200
     assert r.get_json()["api_key_configured"] is False
-    saved = open(client.application.config["PM_ENV_PATH"], encoding="utf-8").read()
-    assert "PM_API_KEY" not in saved
+    user_id = client.get("/auth/me").get_json()["user"]["id"]
+    with sqlite3.connect(client.application.config["PM_AUTH_DB_PATH"]) as conn:
+        saved_key = conn.execute(
+            "SELECT api_key FROM user_api_configs WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+    assert saved_key == ""
+
+
+def test_desktop_account_switcher_and_user_preferences(tmp_path, monkeypatch):
+    monkeypatch.setenv("PM_ACCOUNT_SWITCHER", "1")
+    app = _test_app(tmp_path)
+    with app.test_client() as test_client:
+        test_client.get("/login")
+        first = test_client.post(
+            "/auth/register",
+            json={
+                "display_name": "First Reader",
+                "email": "first@example.com",
+                "password": "first-password",
+            },
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        ).get_json()["user"]
+        theme = test_client.put(
+            "/auth/preferences",
+            json={"theme": "dark"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        )
+        assert theme.status_code == 200
+
+        me = test_client.get("/auth/me").get_json()
+        assert me["preferences"] == {"theme": "dark"}
+        assert [account["email"] for account in me["accounts"]] == [first["email"]]
+
+        test_client.post(
+            "/auth/logout", headers={"X-CSRF-Token": _csrf(test_client)}
+        )
+        login_page = test_client.get(f"/login?account={first['id']}")
+        html = login_page.get_data(as_text=True)
+        assert 'data-testid="local-account-switcher"' in html
+        assert 'value="first@example.com"' in html
+        assert "切换账户需要重新验证" in html
+
+
+def test_api_config_is_isolated_between_local_users(tmp_path):
+    app = _test_app(tmp_path)
+    with app.test_client() as test_client:
+        test_client.get("/login")
+        first = test_client.post(
+            "/auth/register",
+            json={"email": "first@example.com", "password": "first-password"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        ).get_json()["user"]
+        test_client.put(
+            "/api/config",
+            json={"api_key": "first-secret", "chat_model": "first-model"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        )
+        test_client.post(
+            "/auth/logout", headers={"X-CSRF-Token": _csrf(test_client)}
+        )
+
+        test_client.get("/login")
+        test_client.post(
+            "/auth/register",
+            json={"email": "second@example.com", "password": "second-password"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        )
+        second_config = test_client.get("/api/config").get_json()
+        assert second_config["api_key_configured"] is False
+        assert second_config["chat_model"] != "first-model"
+        test_client.put(
+            "/api/config",
+            json={"api_key": "second-secret", "chat_model": "second-model"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        )
+        test_client.post(
+            "/auth/logout", headers={"X-CSRF-Token": _csrf(test_client)}
+        )
+
+        test_client.get("/login")
+        login = test_client.post(
+            "/auth/login",
+            json={"email": first["email"], "password": "first-password"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        )
+        assert login.status_code == 200
+        first_config = test_client.get("/api/config").get_json()
+        assert first_config["api_key_configured"] is True
+        assert first_config["chat_model"] == "first-model"
+
+        with sqlite3.connect(app.config["PM_AUTH_DB_PATH"]) as conn:
+            configs = conn.execute(
+                """SELECT users.email, user_api_configs.api_key
+                   FROM user_api_configs JOIN users ON users.id = user_api_configs.user_id
+                   ORDER BY users.id"""
+            ).fetchall()
+        assert configs == [
+            ("first@example.com", "first-secret"),
+            ("second@example.com", "second-secret"),
+        ]
+
+
+def test_first_user_migrates_legacy_api_config(tmp_path):
+    (tmp_path / "docs").mkdir()
+    cfg = Config(
+        data_dir=str(tmp_path / "docs"),
+        index_dir=str(tmp_path / "index"),
+        api_key="legacy-local-secret",
+        chat_model="legacy-model",
+    )
+    app = create_app(
+        cfg,
+        upload_dir=str(tmp_path / "docs"),
+        env_path=str(tmp_path / "settings.env"),
+        auth_db_path=str(tmp_path / "users.db"),
+    )
+    app.config["TESTING"] = True
+
+    with app.test_client() as test_client:
+        test_client.get("/login")
+        user = test_client.post(
+            "/auth/register",
+            json={"email": "legacy@example.com", "password": "legacy-password"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        ).get_json()["user"]
+        test_client.post(
+            "/auth/logout", headers={"X-CSRF-Token": _csrf(test_client)}
+        )
+        test_client.get("/login")
+        test_client.post(
+            "/auth/register",
+            json={"email": "second@example.com", "password": "second-password"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        )
+        assert test_client.get("/api/config").get_json()["api_key_configured"] is False
+        test_client.post(
+            "/auth/logout", headers={"X-CSRF-Token": _csrf(test_client)}
+        )
+        test_client.get("/login")
+        test_client.post(
+            "/auth/login",
+            json={"email": "legacy@example.com", "password": "legacy-password"},
+            headers={"X-CSRF-Token": _csrf(test_client)},
+        )
+        body = test_client.get("/api/config").get_json()
+        assert body["api_key_configured"] is True
+        assert body["chat_model"] == "legacy-model"
+
+    with sqlite3.connect(app.config["PM_AUTH_DB_PATH"]) as conn:
+        stored = conn.execute(
+            "SELECT api_key FROM user_api_configs WHERE user_id = ?", (user["id"],)
+        ).fetchone()[0]
+    assert stored == "legacy-local-secret"
 
 
 def test_query_requires_question(client):

@@ -165,6 +165,12 @@ http://127.0.0.1:5000/auth/oauth/microsoft/callback
 如端口 5000 已被占用，可在启动前通过 `PM_DESKTOP_PORT` 改为其他固定端口，并同步
 修改 OAuth 平台登记的回调地址。
 
+桌面版右上角的账户菜单可以切换或添加本机用户。切换账户会回到登录页并要求重新
+验证密码；每个用户的 API Key、模型配置和亮暗主题偏好分别保存在本机
+`data\users.db` 中，密钥不会通过接口回传。旧版 `settings.env` 中已有的 API 配置会
+在升级后首次使用时迁移给第一个本机用户，后续用户不会继承其密钥。论文知识库仍是
+这台设备上的共享资源。
+
 ```powershell
 python -m pip install -r requirements-desktop.txt
 powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1

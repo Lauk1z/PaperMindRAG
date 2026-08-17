@@ -54,6 +54,7 @@ def configure_desktop_environment(root: Path = None) -> DesktopPaths:
     os.environ["PM_INDEX_DIR"] = str(paths.index)
     os.environ["PM_ENV_PATH"] = str(paths.env_file)
     os.environ["PM_COOKIE_SECURE"] = "0"
+    os.environ["PM_ACCOUNT_SWITCHER"] = "1"
     os.environ.setdefault("PM_AUTH_REQUIRED", "1")
     os.environ.setdefault("XDG_CACHE_HOME", str(paths.cache))
     return paths
