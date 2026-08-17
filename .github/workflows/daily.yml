@@ -18,6 +18,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install deps
+        run: pip install requests
+
       - name: Generate digest
         env:
           PM_API_KEY: ${{ secrets.PM_API_KEY }}
