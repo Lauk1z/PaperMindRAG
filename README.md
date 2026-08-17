@@ -156,6 +156,20 @@ http://127.0.0.1:5000/auth/oauth/microsoft/callback
 `PM_SECRET_KEY`。未配置时，PaperMind 会在已忽略版本控制的 `data/.session_secret`
 中生成本机开发密钥。
 
+## Windows 桌面版
+
+桌面入口使用系统 WebView2（Chromium）显示现有 Flask 页面。双击程序会在本机随机
+端口启动服务，关闭窗口时服务同步退出；登录账户、论文、索引和网页内保存的 API
+配置位于 `%LOCALAPPDATA%\PaperMind`，升级 EXE 不会覆盖这些数据。
+
+```powershell
+python -m pip install -r requirements-desktop.txt
+powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
+```
+
+构建结果为 `dist\PaperMind.exe`。目标电脑需要 Windows 10/11 和 Microsoft Edge
+WebView2 Runtime（Windows 11 通常已预装）。
+
 ## Render 部署
 
 仓库根目录的 `render.yaml` 会创建新加坡区域的 Docker Web Service，并把
