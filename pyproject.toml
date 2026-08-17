@@ -34,3 +34,4 @@ select = ["E", "F", "W"]  # pycodestyle + pyflakes，保持宽松避免噪音
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # 无需安装包即可从仓库根跑测试
